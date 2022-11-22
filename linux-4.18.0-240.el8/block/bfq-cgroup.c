@@ -23,7 +23,7 @@
 #include <linux/delay.h>
 
 #include "bfq-iosched.h"
-
+extern int open_bfqq_printk;
 #ifdef CONFIG_BFQ_CGROUP_DEBUG
 static int bfq_stat_init(struct bfq_stat *stat, gfp_t gfp)
 {
@@ -436,6 +436,8 @@ void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)
 	}
 	entity->parent = bfqg->my_entity; /* NULL for root group */
 	entity->sched_data = &bfqg->sched_data;
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d bfqq:%llx  sd:%llx entity->weight:%d bfqq->ioprio:%d bfqq->ioprio_class:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)(entity->sched_data),entity->weight,bfqq->ioprio,bfqq->ioprio_class);
 }
 
 static void bfqg_stats_exit(struct bfqg_stats *stats)
@@ -1379,6 +1381,8 @@ void bfq_init_entity(struct bfq_entity *entity, struct bfq_group *bfqg)
 		bfqq->ioprio_class = bfqq->new_ioprio_class;
 	}
 	entity->sched_data = &bfqg->sched_data;
+        if(open_bfqq_printk)
+	    printk("1:%s %d %s %d bfqq:%llx  sd:%llx entity->weight:%d bfqq->ioprio:%d bfqq->ioprio_class:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)(entity->sched_data),entity->weight,bfqq->ioprio,bfqq->ioprio_class);
 }
 
 void bfq_bic_update_cgroup(struct bfq_io_cq *bic, struct bio *bio) {}
