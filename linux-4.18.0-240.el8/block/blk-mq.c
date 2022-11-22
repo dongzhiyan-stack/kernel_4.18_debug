@@ -506,6 +506,30 @@ static void __blk_mq_free_request(struct request *rq)
 		blk_mq_put_tag(hctx->sched_tags, ctx, sched_tag);
 	blk_mq_sched_restart(hctx);
 	blk_queue_exit(q);
+
+        /******process_rq_stat***************/
+	if(rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+		struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
+	    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+		
+		p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
+		rq->p_process_rq_stat->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
+		
+		if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
+			p_process_io_info_tmp->max_dc_time = p_process_rq_stat_tmp->dc_time;
+			p_process_io_info_tmp->max_dc_time_rq = rq;
+		}
+		if(p_process_rq_stat_tmp->idc_time > p_process_io_info_tmp->max_idc_time){
+			p_process_io_info_tmp->max_idc_time = p_process_rq_stat_tmp->idc_time;
+			p_process_io_info_tmp->max_idc_time_rq = rq;
+		}
+		p_process_io_info_tmp->rq_count --;
+		if(p_process_io_info_tmp->rq_count < 0){
+			printk("%s error:%d\n",__func__,p_process_io_info_tmp->rq_count);
+		}
+		
+		kmem_cache_free(rq->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
+	}
 }
 
 void blk_mq_free_request(struct request *rq)
@@ -709,6 +733,19 @@ void blk_mq_start_request(struct request *rq)
 	if (blk_integrity_rq(rq) && req_op(rq) == REQ_OP_WRITE)
 		q->integrity.profile->ext_ops->prepare_fn(rq);
 #endif
+	/******process_rq_stat***************/
+        if(rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+            struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
+	    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+
+	    p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
+	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
+	    if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){
+	        p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
+		p_process_io_info_tmp->max_id_time_rq = rq;
+	    }
+	}
+
 }
 EXPORT_SYMBOL(blk_mq_start_request);
 
@@ -728,6 +765,52 @@ static void __blk_mq_requeue_request(struct request *rq)
 			rq->nr_phys_segments--;
 	}
 }
+/******process_rq_stat***************/
+void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
+{
+	unsigned long flags;
+        struct process_io_info *p_process_io_info_tmp = NULL;
+
+        spin_lock_irqsave(&(p_process_io_tmp->lock), flags);
+	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
+		list_del(&p_process_io_info_tmp->process_io_info_list);
+		kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
+	}
+	spin_unlock_irqrestore(&(p_process_io_tmp->lock), flags);
+
+	kmem_cache_destroy(p_process_io_tmp->process_io_info_cachep);
+        kmem_cache_destroy(p_process_io_tmp->process_rq_stat_cachep);
+}
+EXPORT_SYMBOL(free_all_process_io_info);
+
+void print_process_io_info(struct process_io_control *p_process_io_tmp)
+{
+	unsigned long flags;
+	struct process_io_info *p_process_io_info_tmp = NULL;
+	
+        spin_lock_irqsave(&(p_process_io_tmp->lock), flags);
+	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
+		if(p_process_io_info_tmp->rq_empty_count == 0)
+                    printk("%s %d max_id_time:%dus max_dc_time:%dus max_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,p_process_io_info_tmp->max_id_time,p_process_io_info_tmp->max_dc_time,p_process_io_info_tmp->max_idc_time);
+
+		if(p_process_io_info_tmp->rq_count == 0)
+		{
+			p_process_io_info_tmp->rq_empty_count ++;
+			//释放没有IO请求进程的process_io_info 结构
+			if(p_process_io_info_tmp->rq_empty_count == 5)
+			{
+		             list_del(&p_process_io_info_tmp->process_io_info_list);
+		             kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
+			}
+		}
+		else if(p_process_io_info_tmp->rq_empty_count != 0)
+		{
+		    p_process_io_info_tmp->rq_empty_count = 0;	
+		}
+	}
+	spin_unlock_irqrestore(&(p_process_io_tmp->lock), flags);
+}
+EXPORT_SYMBOL(print_process_io_info);
 
 void blk_mq_requeue_request(struct request *rq, bool kick_requeue_list)
 {

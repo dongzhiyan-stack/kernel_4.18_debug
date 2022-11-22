@@ -414,6 +414,52 @@ EXPORT_SYMBOL_GPL(blk_mq_sched_try_insert_merge);
 void blk_mq_sched_request_inserted(struct request *rq)
 {
 	trace_block_rq_insert(rq->q, rq);
+        /******process_rq_stat***************/
+	if(rq->rq_disk->process_io.enable){
+		struct process_rq_stat *p_process_rq_stat_tmp = NULL;
+	        struct process_io_info *p_process_io_info_tmp = NULL;
+	        int find = 0;
+		
+		unsigned long flags;
+                spin_lock_irqsave(&(rq->rq_disk->process_io.lock), flags);
+		list_for_each_entry(p_process_io_info_tmp, &(rq->rq_disk->process_io.process_io_control_head), process_io_info_list){
+			if(p_process_io_info_tmp->pid == current->pid){
+                              find = 1;
+			}
+		}
+		spin_unlock_irqrestore(&(rq->rq_disk->process_io.lock), flags);
+				
+		if(0 == find){
+		    p_process_io_info_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_io_info_cachep,GFP_KERNEL);
+		    if(!p_process_io_info_tmp)
+			    goto fail;
+			
+			memset(p_process_io_info_tmp,0,sizeof(struct process_io_info));
+			spin_lock_irqsave(&(rq->rq_disk->process_io.lock), flags);
+			list_add(&p_process_io_info_tmp->process_io_info_list,&(rq->rq_disk->process_io.process_io_control_head));
+			spin_unlock_irqrestore(&(rq->rq_disk->process_io.lock), flags);
+	        }
+		p_process_rq_stat_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_rq_stat_cachep,GFP_KERNEL);
+		if(!p_process_rq_stat_tmp)
+			goto fail;
+		memset(p_process_rq_stat_tmp,0,sizeof(struct process_rq_stat));
+		
+		p_process_io_info_tmp->rq_count ++;
+		p_process_io_info_tmp->pid = current->pid;
+		strncpy(p_process_io_info_tmp->comm,current->comm,COMM_LEN);
+		
+		p_process_rq_stat_tmp->p_process_io_info = p_process_io_info_tmp;
+		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
+		rq->p_process_rq_stat = p_process_rq_stat_tmp;
+
+		return;
+	fail:
+                if(p_process_rq_stat_tmp)
+   	            kmem_cache_free(rq->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
+	        if(p_process_io_info_tmp)
+	            kmem_cache_free(rq->rq_disk->process_io.process_io_info_cachep, p_process_io_info_tmp);
+	}
+
 }
 EXPORT_SYMBOL_GPL(blk_mq_sched_request_inserted);
 

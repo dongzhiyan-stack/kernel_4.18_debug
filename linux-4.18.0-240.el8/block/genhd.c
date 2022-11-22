@@ -2067,6 +2067,70 @@ static ssize_t disk_events_poll_msecs_store(struct device *dev,
 	return count;
 }
 
+/******process_rq_stat***************/
+#include <linux/delay.h>
+extern void print_process_io_info(struct process_io_control *p_process_io_tmp);
+extern void free_all_process_io_info(struct process_io_control *p_process_io_tmp);
+static int process_rq_stat_thread(void *arg)
+{
+    struct process_io_control *p_process_io_tmp = (struct process_io_control *)arg;
+    while (!kthread_should_stop()) {
+        print_process_io_info(p_process_io_tmp);
+
+        if(p_process_io_tmp->enable == 0){ 
+	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
+            free_all_process_io_info(p_process_io_tmp);
+	    break;
+	}
+	msleep(1000);
+    }
+    p_process_io_tmp->kernel_thread = NULL;
+    return 0;
+}
+static ssize_t disk_process_rq_stat_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+
+	return sprintf(buf, "%d\n", disk->process_io.enable);
+}
+static ssize_t disk_process_rq_stat_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	long intv;
+
+	if (!count || !sscanf(buf, "%ld", &intv))
+		return -EINVAL;
+
+	if (!(intv == 0 || intv == 1))
+		return -EINVAL;
+    
+	if(disk->process_io.enable != intv){
+	    disk->process_io.enable = intv;
+		if(disk->process_io.enable == 1)
+		{
+                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
+		    spin_lock_init(&(disk->process_io.lock));
+		    disk->process_io.process_rq_stat_cachep = KMEM_CACHE(process_rq_stat,0);
+                    disk->process_io.process_io_info_cachep = KMEM_CACHE(process_io_info,0);
+
+	            disk->process_io.kernel_thread = kthread_create(process_rq_stat_thread,(void *)&disk->process_io,"process_rq_stat");
+	            if (IS_ERR(disk->process_io.kernel_thread )) {
+				printk("%s kthread_create fail\n",__func__);
+			}else{
+			    wake_up_process(disk->process_io.kernel_thread);
+		        }
+		}
+       }
+       return count;
+}
+static const DEVICE_ATTR(process_rq_stat, 0644,
+			 disk_process_rq_stat_show,
+			 disk_process_rq_stat_store);
+
 static const DEVICE_ATTR(events, 0444, disk_events_show, NULL);
 static const DEVICE_ATTR(events_async, 0444, disk_events_async_show, NULL);
 static const DEVICE_ATTR(events_poll_msecs, 0644,
@@ -2077,6 +2141,7 @@ static const struct attribute *disk_events_attrs[] = {
 	&dev_attr_events.attr,
 	&dev_attr_events_async.attr,
 	&dev_attr_events_poll_msecs.attr,
+	&dev_attr_process_rq_stat.attr,
 	NULL,
 };
 
