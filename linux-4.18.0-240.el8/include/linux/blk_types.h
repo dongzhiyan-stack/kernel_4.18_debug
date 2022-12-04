@@ -10,44 +10,6 @@
 #include <linux/bvec.h>
 #include <linux/ktime.h>
 #include <linux/rh_kabi.h>
-/******process_rq_stat***************/
-#define COMM_LEN			16
-struct process_io_control{
-        int enable;
-	spinlock_t lock;
-	struct list_head process_io_control_head;
-	struct task_struct *kernel_thread;
-	struct kmem_cache *process_rq_stat_cachep;
-        struct kmem_cache *process_io_info_cachep;
-};
-struct process_io_info{
-	int pid;
-	char comm[COMM_LEN];
-	int rq_count;
-	int rq_empty_count;
-	
-	u32 max_id_time;
-	u32 max_dc_time;
-	u32 max_idc_time;
-
-	struct request *max_id_time_rq;
-	struct request *max_dc_time_rq;
-	struct request *max_idc_time_rq;
-	
-	struct list_head process_io_info_list;
-};
-struct process_rq_stat{
-	struct request *rq;
-	
-	u64 rq_inset_time;
-	u64 rq_issue_time;
-	
-	u32 id_time;
-	u32 dc_time;
-	u32 idc_time;
-	
-	struct process_io_info *p_process_io_info;
-};
 
 struct bio_set;
 struct bio;
@@ -101,6 +63,45 @@ typedef u8 __bitwise blk_status_t;
  * any other system wide resources.
  */
 #define BLK_STS_DEV_RESOURCE	((__force blk_status_t)13)
+/******process_rq_stat***************/
+#define COMM_LEN			16
+struct process_io_control{
+        int enable;
+	spinlock_t process_lock;
+	struct list_head process_io_control_head;
+	struct task_struct *kernel_thread;
+	struct kmem_cache *process_rq_stat_cachep;
+        struct kmem_cache *process_io_info_cachep;
+	atomic_t lock_count;
+};
+struct process_io_info{
+	int pid;
+	char comm[COMM_LEN];
+	int rq_count;
+	int rq_empty_count;
+	
+	u32 max_id_time;
+	u32 max_dc_time;
+	u32 max_idc_time;
+
+	struct request *max_id_time_rq;
+	struct request *max_dc_time_rq;
+	struct request *max_idc_time_rq;
+	
+	struct list_head process_io_info_list;
+};
+struct process_rq_stat{
+	struct request *rq;
+	
+	u64 rq_inset_time;
+	u64 rq_issue_time;
+	
+	u32 id_time;
+	u32 dc_time;
+	u32 idc_time;
+	
+	struct process_io_info *p_process_io_info;
+};
 
 /**
  * blk_path_error - returns true if error may be path related

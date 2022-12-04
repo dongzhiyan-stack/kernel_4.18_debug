@@ -193,6 +193,9 @@ struct gendisk {
 
 	char disk_name[DISK_NAME_LEN];	/* name of major driver */
 	char *(*devnode)(struct gendisk *gd, umode_t *mode);
+	
+	/******process_rq_stat***************/
+	struct process_io_control process_io;
 
 	unsigned int events;		/* supported events */
 	unsigned int async_events;	/* async events, subset of all */
@@ -229,7 +232,7 @@ struct gendisk {
 	RH_KABI_RESERVE(4)
 
 	/******process_rq_stat***************/
-	struct process_io_control process_io;
+	//struct process_io_control process_io;
 };
 
 static inline struct gendisk *part_to_disk(struct hd_struct *part)

@@ -322,11 +322,16 @@ static struct sysrq_key_op sysrq_ftrace_dump_op = {
 #else
 #define sysrq_ftrace_dump_op (*(struct sysrq_key_op *)NULL)
 #endif
-
+int open_bfqq_printk;
 static void sysrq_handle_showmem(int key)
 {
-	show_mem(0, NULL);
+	//show_mem(0, NULL);
+	if(open_bfqq_printk)
+	    open_bfqq_printk = 0;
+	else
+	    open_bfqq_printk = 1;
 }
+EXPORT_SYMBOL(open_bfqq_printk);
 static struct sysrq_key_op sysrq_showmem_op = {
 	.handler	= sysrq_handle_showmem,
 	.help_msg	= "show-memory-usage(m)",

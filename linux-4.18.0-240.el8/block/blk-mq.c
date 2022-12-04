@@ -506,30 +506,6 @@ static void __blk_mq_free_request(struct request *rq)
 		blk_mq_put_tag(hctx->sched_tags, ctx, sched_tag);
 	blk_mq_sched_restart(hctx);
 	blk_queue_exit(q);
-
-        /******process_rq_stat***************/
-	if(rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
-		struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
-	    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
-		
-		p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
-		rq->p_process_rq_stat->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
-		
-		if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
-			p_process_io_info_tmp->max_dc_time = p_process_rq_stat_tmp->dc_time;
-			p_process_io_info_tmp->max_dc_time_rq = rq;
-		}
-		if(p_process_rq_stat_tmp->idc_time > p_process_io_info_tmp->max_idc_time){
-			p_process_io_info_tmp->max_idc_time = p_process_rq_stat_tmp->idc_time;
-			p_process_io_info_tmp->max_idc_time_rq = rq;
-		}
-		p_process_io_info_tmp->rq_count --;
-		if(p_process_io_info_tmp->rq_count < 0){
-			printk("%s error:%d\n",__func__,p_process_io_info_tmp->rq_count);
-		}
-		
-		kmem_cache_free(rq->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
-	}
 }
 
 void blk_mq_free_request(struct request *rq)
@@ -734,14 +710,16 @@ void blk_mq_start_request(struct request *rq)
 		q->integrity.profile->ext_ops->prepare_fn(rq);
 #endif
 	/******process_rq_stat***************/
-        if(rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+        if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
             struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
 	    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
 
+            printk("%s %s %d\n",__func__,current->comm,current->pid);
 	    p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
 	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
 	    if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){
 	        p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
+		//??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
 		p_process_io_info_tmp->max_id_time_rq = rq;
 	    }
 	}
@@ -771,36 +749,51 @@ void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
 	unsigned long flags;
         struct process_io_info *p_process_io_info_tmp = NULL;
 
-        spin_lock_irqsave(&(p_process_io_tmp->lock), flags);
+        spin_lock_irqsave(&(p_process_io_tmp->process_lock), flags);
 	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
 		list_del(&p_process_io_info_tmp->process_io_info_list);
 		kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
 	}
-	spin_unlock_irqrestore(&(p_process_io_tmp->lock), flags);
+	spin_unlock_irqrestore(&(p_process_io_tmp->process_lock), flags);
 
 	kmem_cache_destroy(p_process_io_tmp->process_io_info_cachep);
         kmem_cache_destroy(p_process_io_tmp->process_rq_stat_cachep);
 }
 EXPORT_SYMBOL(free_all_process_io_info);
-
+extern int process_io_count;
 void print_process_io_info(struct process_io_control *p_process_io_tmp)
 {
-	unsigned long flags;
+	//unsigned long flags;
 	struct process_io_info *p_process_io_info_tmp = NULL;
-	
-        spin_lock_irqsave(&(p_process_io_tmp->lock), flags);
+	struct process_io_info *p_process_io_info_del = NULL;
+	//int cycle_count = 0;
+		printk("%s %s %d process_io_count:%d lock_count:%d spin_lock:%d in\n",__func__,current->comm,current->pid,process_io_count,atomic_read(&(p_process_io_tmp->lock_count)),atomic_read(&(p_process_io_tmp->process_lock.rlock.raw_lock.val)));
+		//return ;
+        //spin_lock_irqsave(&(p_process_io_tmp->lock), flags);
+        spin_lock_irq(&(p_process_io_tmp->process_lock));
+	atomic_inc(&(p_process_io_tmp->lock_count));
 	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
-		if(p_process_io_info_tmp->rq_empty_count == 0)
-                    printk("%s %d max_id_time:%dus max_dc_time:%dus max_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,p_process_io_info_tmp->max_id_time,p_process_io_info_tmp->max_dc_time,p_process_io_info_tmp->max_idc_time);
-
+		//if(p_process_io_info_tmp->rq_empty_count == 0)
+                //    printk("%s %d max_id_time:%dus max_dc_time:%dus max_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,p_process_io_info_tmp->max_id_time,p_process_io_info_tmp->max_dc_time,p_process_io_info_tmp->max_idc_time);
+                if(p_process_io_info_del && 0)
+		{
+		   list_del(&p_process_io_info_del->process_io_info_list);
+		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
+		    p_process_io_info_del = NULL;
+		    process_io_count --;
+		}
+		//printk("%s %s %d 2\n",__func__,current->comm,current->pid);
 		if(p_process_io_info_tmp->rq_count == 0)
 		{
 			p_process_io_info_tmp->rq_empty_count ++;
-			//释放没有IO请求进程的process_io_info 结构
-			if(p_process_io_info_tmp->rq_empty_count == 5)
+			//释放没有IO请求进程的process_io_info 结构。有没有可能在释放 process_io_info时，此时对应进程来了新的IO请求呢，就使用无效 process_io_info了。不会，由 spin_lock_irq加锁保护
+			if(p_process_io_info_tmp->rq_empty_count == 3)
 			{
-		             list_del(&p_process_io_info_tmp->process_io_info_list);
-		             kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
+		             //list_del(&p_process_io_info_tmp->process_io_info_list);
+		             //kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
+			     //p_process_io_info_tmp->pid = -1;
+			     //????????????这里不能delete p_process_io_info_tmp,因为下个for循环，要依赖 p_process_io_info_tmp.next找到下一个链表成员，p_process_io_info_tmp删除后p_process_io_info_tmp.next就可能是个非法值.看下 list_for_each_entry源码就清楚了
+			     p_process_io_info_del = p_process_io_info_tmp;
 			}
 		}
 		else if(p_process_io_info_tmp->rq_empty_count != 0)
@@ -808,7 +801,18 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    p_process_io_info_tmp->rq_empty_count = 0;	
 		}
 	}
-	spin_unlock_irqrestore(&(p_process_io_tmp->lock), flags);
+	//???????这段代码需要放到加锁里，因为可能此时正好p_process_io_info_del这个process_io_info绑定的进程传输IO，使用了p_process_io_info_del。而现在加了锁，这个进程根本访问不到p_process_io_info_del这个process_io_info
+	if(p_process_io_info_del && 0)
+	{
+	    list_del(&p_process_io_info_del->process_io_info_list);
+	    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
+	    p_process_io_info_del = NULL;
+	    process_io_count --;
+	}
+	//spin_unlock_irqrestore(&(p_process_io_tmp->lock), flags);
+        spin_unlock_irq(&(p_process_io_tmp->process_lock));
+	atomic_dec(&(p_process_io_tmp->lock_count));
+	printk("%s %s %d process_io_count:%d out\n",__func__,current->comm,current->pid,process_io_count);
 }
 EXPORT_SYMBOL(print_process_io_info);
 

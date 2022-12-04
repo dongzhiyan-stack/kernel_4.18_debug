@@ -138,6 +138,9 @@ struct request {
 	struct request_queue *q;
 	struct blk_mq_ctx *mq_ctx;
 	struct blk_mq_hw_ctx *mq_hctx;
+	
+	/******process_rq_stat***************/
+	struct process_rq_stat *p_process_rq_stat;
 
 	unsigned int cmd_flags;		/* op and common flags */
 	req_flags_t rq_flags;
@@ -247,8 +250,6 @@ struct request {
 	/* for bidi */
 	RH_KABI_DEPRECATE(struct request *, next_rq)
 	
-	/******process_rq_stat***************/
-	struct process_rq_stat *p_process_rq_stat;
 };
 
 extern struct request_aux *blk_rq_aux(const struct request *rq);

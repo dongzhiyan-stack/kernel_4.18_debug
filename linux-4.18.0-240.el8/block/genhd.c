@@ -2075,11 +2075,13 @@ static int process_rq_stat_thread(void *arg)
 {
     struct process_io_control *p_process_io_tmp = (struct process_io_control *)arg;
     while (!kthread_should_stop()) {
-        print_process_io_info(p_process_io_tmp);
+	if(p_process_io_tmp)
+            print_process_io_info(p_process_io_tmp);
 
         if(p_process_io_tmp->enable == 0){ 
 	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
-            free_all_process_io_info(p_process_io_tmp);
+	    //if(p_process_io_tmp)
+            //    free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
 	    break;
 	}
 	msleep(1000);
@@ -2109,11 +2111,14 @@ static ssize_t disk_process_rq_stat_store(struct device *dev,
 		return -EINVAL;
     
 	if(disk->process_io.enable != intv){
-	    disk->process_io.enable = intv;
-		if(disk->process_io.enable == 1)
+		//这里把 disk->process_io.enable = intv注释掉，而放后边，是因为。在设置1使能后，process_rq_stat_cachep、process_io_info_cachep、process_io_control_head等立即还未初始化，而此时blk_mq_sched_request_inserted函数里，就可能因为disk->process_io.enable是1而从process_rq_stat_cachep、process_io_info_cachep 分配结构体，此时肯定要crash了
+	        //disk->process_io.enable = intv;
+         	//if(disk->process_io.enable == 1)
+		if(intv)
 		{
                     INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
-		    spin_lock_init(&(disk->process_io.lock));
+		    spin_lock_init(&(disk->process_io.process_lock));
+		    atomic_set(&(disk->process_io.lock_count),0);
 		    disk->process_io.process_rq_stat_cachep = KMEM_CACHE(process_rq_stat,0);
                     disk->process_io.process_io_info_cachep = KMEM_CACHE(process_io_info,0);
 
@@ -2124,6 +2129,7 @@ static ssize_t disk_process_rq_stat_store(struct device *dev,
 			    wake_up_process(disk->process_io.kernel_thread);
 		        }
 		}
+		disk->process_io.enable = intv;
        }
        return count;
 }

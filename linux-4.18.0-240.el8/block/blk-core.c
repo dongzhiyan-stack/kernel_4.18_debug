@@ -1340,7 +1340,43 @@ void blk_account_io_done(struct request *req, u64 now)
 		part_dec_in_flight(req->q, part, rq_data_dir(req));
 
 		hd_struct_put(part);
-		part_stat_unlock();
+		part_stat_unlock(); 
+	 	/******process_rq_stat***************/
+ 	        if(req->rq_disk && req->rq_disk->process_io.enable && req->p_process_rq_stat){
+			struct process_rq_stat *p_process_rq_stat_tmp = req->p_process_rq_stat;
+			struct process_io_info *p_process_io_info_tmp = req->p_process_rq_stat->p_process_io_info;
+			//return;
+		        //?????????????用完后比例立即赋值NULL
+			//p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
+			p_process_rq_stat_tmp->dc_time = 100;
+			req->p_process_rq_stat->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
+                        //return;		        
+			//printk("%s %s %d\n",__func__,current->comm,current->pid);
+			
+			if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
+				p_process_io_info_tmp->max_dc_time = p_process_rq_stat_tmp->dc_time;
+				//??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
+				p_process_io_info_tmp->max_dc_time_rq = req;
+			}
+			
+			if(p_process_rq_stat_tmp->idc_time > p_process_io_info_tmp->max_idc_time){
+				p_process_io_info_tmp->max_idc_time = p_process_rq_stat_tmp->idc_time;
+				printk("%s req:0x%llx process_rq_stat:0x%llx process_io_info:0x%llx max_idc_time_rq:0x%llx   spin_lock:%d 1\n",__func__,(u64)req,(u64)req->p_process_rq_stat,(u64)req->p_process_rq_stat->p_process_io_info,(u64)(&(p_process_io_info_tmp->max_idc_time_rq)),atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
+				//牛逼了，测试证明就是这行代码导致的卡死?????????????????
+				p_process_io_info_tmp->max_idc_time_rq = req;
+				printk("%s spin_lock:%d 2\n",__func__,atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
+			}
+                        //return;		        
+			p_process_io_info_tmp->rq_count --;
+			if(p_process_io_info_tmp->rq_count < 0){
+				//printk("%s error:%d\n",__func__,p_process_io_info_tmp->rq_count);
+			}
+			
+			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
+		        req->p_process_rq_stat = NULL;	
+			printk("%s spin_lock:%d 3\n",__func__,atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
+	        }
+
 	}
 }
 
