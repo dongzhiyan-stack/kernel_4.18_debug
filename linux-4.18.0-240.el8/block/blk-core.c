@@ -1345,38 +1345,46 @@ void blk_account_io_done(struct request *req, u64 now)
  	        if(req->rq_disk && req->rq_disk->process_io.enable && req->p_process_rq_stat){
 			struct process_rq_stat *p_process_rq_stat_tmp = req->p_process_rq_stat;
 			struct process_io_info *p_process_io_info_tmp = req->p_process_rq_stat->p_process_io_info;
-			//return;
-		        //?????????????用完后比例立即赋值NULL
-			//p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
-			p_process_rq_stat_tmp->dc_time = 100;
-			req->p_process_rq_stat->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
-                        //return;		        
-			//printk("%s %s %d\n",__func__,current->comm,current->pid);
+
+			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
+			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
 			
 			if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
+				//记录最大的dc time
 				p_process_io_info_tmp->max_dc_time = p_process_rq_stat_tmp->dc_time;
 				//??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
-				p_process_io_info_tmp->max_dc_time_rq = req;
+				//p_process_io_info_tmp->max_dc_time_rq = req;
+				//记录此时 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
+				p_process_io_info_tmp->rq_inflght_done[0] =  req->rq_disk->process_io.rq_in_queue;
+				p_process_io_info_tmp->rq_inflght_done[1] =  req->rq_disk->process_io.rq_in_driver;
 			}
 			
 			if(p_process_rq_stat_tmp->idc_time > p_process_io_info_tmp->max_idc_time){
+				//记录最大的idc time
 				p_process_io_info_tmp->max_idc_time = p_process_rq_stat_tmp->idc_time;
-				printk("%s req:0x%llx process_rq_stat:0x%llx process_io_info:0x%llx max_idc_time_rq:0x%llx   spin_lock:%d 1\n",__func__,(u64)req,(u64)req->p_process_rq_stat,(u64)req->p_process_rq_stat->p_process_io_info,(u64)(&(p_process_io_info_tmp->max_idc_time_rq)),atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
-				//牛逼了，测试证明就是这行代码导致的卡死?????????????????
-				p_process_io_info_tmp->max_idc_time_rq = req;
-				printk("%s spin_lock:%d 2\n",__func__,atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
+				//p_process_io_info_tmp->max_idc_time_rq = req;
 			}
-                        //return;		        
+
+			spin_lock_irq(&(req->rq_disk->process_io.process_lock));
+			//进程在传输的IO请求数减1
 			p_process_io_info_tmp->rq_count --;
-			if(p_process_io_info_tmp->rq_count < 0){
-				//printk("%s error:%d\n",__func__,p_process_io_info_tmp->rq_count);
+			//累加进程的IO请求在磁盘驱动的时间,需加锁保护，因为同时可能执行print_process_io_info函数清0
+	                p_process_io_info_tmp->all_dc_time += p_process_rq_stat_tmp->dc_time;
+			//累加进程的IO请求在IO队列和磁盘驱动的时间，加锁同理
+	                p_process_io_info_tmp->all_idc_time += p_process_rq_stat_tmp->idc_time;
+	                //在磁盘驱动IO请求数加减，加锁同理，因为同时进程可能在派发IO请求而 rq->rq_disk->process_io.rq_in_driver++
+	                req->rq_disk->process_io.rq_in_driver --;
+                        //进程传输完成的IO请求数加1
+			p_process_io_info_tmp->complete_rq_count ++;
+			spin_unlock_irq(&(req->rq_disk->process_io.process_lock));
+
+			if(p_process_io_info_tmp->rq_count < 0 || req->rq_disk->process_io.rq_in_driver < 0){
+				printk(KERN_DEBUG"%s rq_count:%d rq_in_driver:%d !!!!!!\n",__func__,p_process_io_info_tmp->rq_count,req->rq_disk->process_io.rq_in_driver);
 			}
 			
 			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
 		        req->p_process_rq_stat = NULL;	
-			printk("%s spin_lock:%d 3\n",__func__,atomic_read(&(req->rq_disk->process_io.process_lock.rlock.raw_lock.val)));
 	        }
-
 	}
 }
 

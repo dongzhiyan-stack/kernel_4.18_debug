@@ -411,7 +411,6 @@ bool blk_mq_sched_try_insert_merge(struct request_queue *q, struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_mq_sched_try_insert_merge);
 
-int process_io_count;
 void blk_mq_sched_request_inserted(struct request *rq)
 {
 	//int cycle_count = 0;
@@ -423,30 +422,22 @@ void blk_mq_sched_request_inserted(struct request *rq)
 	        struct process_io_info *p_process_io_info_tmp = NULL;
 	        int find = 0;
 		
-		//unsigned long flags;
-                //spin_lock_irqsave(&(rq->rq_disk->process_io.lock), flags);
 		if(!rq->rq_disk->process_io.process_io_info_cachep || !rq->rq_disk->process_io.process_rq_stat_cachep){
-		    //printk("%s %p %p\n",__func__,rq->rq_disk->process_io.process_io_info_cachep,rq->rq_disk->process_io.process_rq_stat_cachep);
+		    printk(KERN_DEBUG"%s %p %p\n",__func__,rq->rq_disk->process_io.process_io_info_cachep,rq->rq_disk->process_io.process_rq_stat_cachep);
 		}
-		printk("%s %s %d process_io_count:%d lock_count:%d spin_lock:%d enable:%d  1\n",__func__,current->comm,current->pid,process_io_count,atomic_read(&(rq->rq_disk->process_io.lock_count)),atomic_read(&(rq->rq_disk->process_io.process_lock.rlock.raw_lock.val)),rq->rq_disk->process_io.enable);
                 spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
-		atomic_inc(&(rq->rq_disk->process_io.lock_count));
 		list_for_each_entry(p_process_io_info_tmp, &(rq->rq_disk->process_io.process_io_control_head), process_io_info_list){
-		        //if(cycle_count++ > 50)
-		        //    break;
 			if(p_process_io_info_tmp->pid == current->pid){
 		              //????????p_process_io_info_tmp->rq_count ++要放到锁保护里.因为不这样做，这里找到一个p_process_io_info_tmp->rq_count是0，并且p_process_io_info_tmp->rq_empty_count是4的process_io_info，
 			      //还没执行到下边的p_process_io_info_tmp->rq_count ++。而此时process_io线程执行到print_process_io_info()函数，p_process_io_info_tmp->rq_count还是0，此时p_process_io_info_tmp->rq_empty_count++变为5，
 			      //就会释放掉p_process_io_info_tmp结构。此时在blk_mq_sched_request_inserted()函数里，再执行p_process_io_info_tmp->rq_count ++就会crash，因为此时p_process_io_info_tmp这个process_io_info结构释放了
 		              p_process_io_info_tmp->rq_count ++;
+			      rq->rq_disk->process_io.rq_in_queue ++;
                               find = 1;
-			      //break;
+			      break;
 			}
 		}
-		//spin_unlock_irqrestore(&(rq->rq_disk->process_io.lock), flags);
 		spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
-		atomic_dec(&(rq->rq_disk->process_io.lock_count));
-		printk("%s %s %d process_io_count:%d 2\n",__func__,current->comm,current->pid,process_io_count);
 				
 		if(0 == find){
 		    p_process_io_info_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_io_info_cachep,GFP_ATOMIC);
@@ -454,14 +445,14 @@ void blk_mq_sched_request_inserted(struct request *rq)
 			    goto fail;
 			
 			memset(p_process_io_info_tmp,0,sizeof(struct process_io_info));
-			//spin_lock_irqsave(&(rq->rq_disk->process_io.lock), flags);
+
                         spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
-		        atomic_inc(&(rq->rq_disk->process_io.lock_count));
-			process_io_count++;
+			//进程在传输的IO请求加1
+		        p_process_io_info_tmp->rq_count ++;
+			//在IO队列的IO请求数加1
+			rq->rq_disk->process_io.rq_in_queue ++;
 			list_add(&p_process_io_info_tmp->process_io_info_list,&(rq->rq_disk->process_io.process_io_control_head));
-			//spin_unlock_irqrestore(&(rq->rq_disk->process_io.lock), flags);
 		        spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
-		        atomic_dec(&(rq->rq_disk->process_io.lock_count));
 	        }
 		p_process_rq_stat_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_rq_stat_cachep,GFP_ATOMIC);
 		if(!p_process_rq_stat_tmp)
@@ -469,13 +460,11 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		memset(p_process_rq_stat_tmp,0,sizeof(struct process_rq_stat));
 		
 		p_process_io_info_tmp->pid = current->pid;
-		//p_process_io_info_tmp->rq_count ++;
 		strncpy(p_process_io_info_tmp->comm,current->comm,COMM_LEN-1);
 		
 		p_process_rq_stat_tmp->p_process_io_info = p_process_io_info_tmp;
 		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
 		rq->p_process_rq_stat = p_process_rq_stat_tmp;
-		printk("%s %s %d process_io_count:%d process_io:0x%llx  rq:0x%llx rq->p_process_rq_stat:0x%llx process_io_info:0x%llx 3\n",__func__,current->comm,current->pid,process_io_count,(u64)(&rq->rq_disk->process_io),(u64)rq,(u64)rq->p_process_rq_stat,(u64)p_process_rq_stat_tmp->p_process_io_info);
 
 		return;
 	fail:

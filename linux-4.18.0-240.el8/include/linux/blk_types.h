@@ -64,29 +64,47 @@ typedef u8 __bitwise blk_status_t;
  */
 #define BLK_STS_DEV_RESOURCE	((__force blk_status_t)13)
 /******process_rq_stat***************/
+//#include <linux/rwsem.h>
 #define COMM_LEN			16
 struct process_io_control{
         int enable;
 	spinlock_t process_lock;
+	//struct rw_semaphore  rw_lock;//读写锁使用时可能休眠，不能用在中断上下文
 	struct list_head process_io_control_head;
 	struct task_struct *kernel_thread;
 	struct kmem_cache *process_rq_stat_cachep;
         struct kmem_cache *process_io_info_cachep;
-	atomic_t lock_count;
+	//在IO队列的IO请求数
+	int rq_in_queue;
+	//在磁盘驱动的IO请求数
+	int rq_in_driver;
 };
 struct process_io_info{
 	int pid;
 	char comm[COMM_LEN];
+	//进程有多少个IO请求在传输
 	int rq_count;
+	//进程没有IO请求时的统计次数，达到阀值则释放 进程的 process_io_info结构
 	int rq_empty_count;
 	
-	u32 max_id_time;
-	u32 max_dc_time;
-	u32 max_idc_time;
+	u32 max_id_time;//IO请求在IO队列最长的停留时间(进程的)
+	u32 max_dc_time;//IO请求在磁盘驱动层的最长耗时(进程的)
+	u32 max_idc_time;//IO请求从插入队列到传输完成的最大总耗时(进程的)
 
-	struct request *max_id_time_rq;
-	struct request *max_dc_time_rq;
-	struct request *max_idc_time_rq;
+	u32 all_id_time;//进程传输的每个IO请求在队列停留时间之和
+	u32 all_dc_time;//进程传输的IO请求在磁盘驱动层的耗时之和
+	u32 all_idc_time;//进程传输的IO请求插入队列到传输完成时间之和
+	
+	//struct request *max_id_time_rq;
+	//struct request *max_dc_time_rq;
+	//struct request *max_idc_time_rq;
+        
+	//进程在派发IO请求时，在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
+        u8  rq_inflght_issue[2];
+        //进程的IO请求传输完成时，在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
+        u8  rq_inflght_done[2];
+	//周期内进程传输完成的IO请求数，每个周期开始时清0，然后进程每传输完成一个IO则加1
+        int complete_rq_count;
 	
 	struct list_head process_io_info_list;
 };
