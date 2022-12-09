@@ -68,25 +68,31 @@ typedef u8 __bitwise blk_status_t;
 #define COMM_LEN			16
 struct process_io_control{
         int enable;
-	spinlock_t process_lock;
+	spinlock_t io_data_lock;
+	spinlock_t process_lock_list;
 	//struct rw_semaphore  rw_lock;//读写锁使用时可能休眠，不能用在中断上下文
 	struct list_head process_io_control_head;
+	struct list_head process_io_control_head_del;//暂时存放delete的process_io_info
 	struct task_struct *kernel_thread;
 	struct kmem_cache *process_rq_stat_cachep;
         struct kmem_cache *process_io_info_cachep;
 	//在IO队列的IO请求数
-	int rq_in_queue;
+	//int rq_in_queue;
+	atomic_t rq_in_queue;
 	//在磁盘驱动的IO请求数
-	int rq_in_driver;
+	//int rq_in_driver;
+	atomic_t rq_in_driver;
+	atomic_t read_lock_count;
 };
 struct process_io_info{
 	int pid;
 	char comm[COMM_LEN];
 	//进程有多少个IO请求在传输
-	int rq_count;
+	//int rq_count;
+	atomic_t rq_count;
 	//进程没有IO请求时的统计次数，达到阀值则释放 进程的 process_io_info结构
 	int rq_empty_count;
-	
+
 	u32 max_id_time;//IO请求在IO队列最长的停留时间(进程的)
 	u32 max_dc_time;//IO请求在磁盘驱动层的最长耗时(进程的)
 	u32 max_idc_time;//IO请求从插入队列到传输完成的最大总耗时(进程的)
@@ -107,6 +113,10 @@ struct process_io_info{
         int complete_rq_count;
 	
 	struct list_head process_io_info_list;
+	struct list_head process_io_info_del;
+
+	atomic_t refcount;//list_for_each_entry遍历process_io_info链表时，当前的process_io_info被访问时加1，访问结束减1，在refcount是0时，print_process_io_info()函数中才能释放 process_io_info结构
+	int has_deleted; 
 };
 struct process_rq_stat{
 	struct request *rq;

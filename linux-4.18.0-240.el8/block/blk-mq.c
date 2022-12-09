@@ -717,20 +717,26 @@ void blk_mq_start_request(struct request *rq)
 	    p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
 	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
             
-	    spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
+	    //spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
+	    /*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
 	    //累加进程的IO请求在队列的时间,需加锁保护，因为同时可能执行print_process_io_info函数清0
-	    p_process_io_info_tmp->all_id_time += p_process_rq_stat_tmp->id_time;
+	    //p_process_io_info_tmp->all_id_time += p_process_rq_stat_tmp->id_time;
+
 	    //在IO队列IO请求数减1，需加锁保护，因为同时进程可能在向IO队列插入其他IO请求而 rq->rq_disk->process_io.rq_in_queue++
 	    rq->rq_disk->process_io.rq_in_queue --;
 	    //在磁盘驱动IO请求数加1，加锁同理
 	    rq->rq_disk->process_io.rq_in_driver ++;
-	    spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
+	    //spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
+	    spin_unlock_irq(&(rq->rq_disk->process_io.io_data_lock));
+            */
+	    atomic_dec(&(rq->rq_disk->process_io.rq_in_queue));
+	    atomic_inc(&(rq->rq_disk->process_io.rq_in_driver));
 
-	    if(rq->rq_disk->process_io.rq_in_queue < 0){
-	        printk(KERN_DEBUG"%s rq_in_queue:%d!!!!!!\n",__func__,rq->rq_disk->process_io.rq_in_queue);
+	    if(atomic_read(&(rq->rq_disk->process_io.rq_in_queue)) < 0){
+	        printk(KERN_DEBUG"%s rq_in_queue:%d!!!!!!\n",__func__,atomic_read(&(rq->rq_disk->process_io.rq_in_queue)));
 	    }
 	    if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){//记录最大的id time
-	        p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
+	        //p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
 		//??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
 		//p_process_io_info_tmp->max_id_time_rq = rq;
 		//记录此时 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
@@ -789,15 +795,18 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 {
 	struct process_io_info *p_process_io_info_tmp = NULL;
 	struct process_io_info *p_process_io_info_del = NULL;
-
-        spin_lock_irq(&(p_process_io_tmp->process_lock));
-	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
-		if(p_process_io_info_tmp->rq_empty_count == 0)
+        int i = 0;
+        //spin_lock_irq(&(p_process_io_tmp->process_lock));
+        atomic_inc(&(p_process_io_tmp->read_lock_count));//类似 rcu_read_lock()开始宽限期Grace Period
+	//list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
+	list_for_each_entry_rcu(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
+	        
+	        spin_lock_irq(&(p_process_io_tmp->io_data_lock));	
+		if(p_process_io_info_tmp->rq_empty_count == 0)//最好是定义变量把这些数据保存起来，然后在锁外printk打印
 	            printk("%s %d complete_rq_count:%d max_id_time:%dus max_dc_time:%dus max_idc_time:%dus rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%d avg_dc_time:%d avg_idc_time:%d\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,p_process_io_info_tmp->complete_rq_count,p_process_io_info_tmp->max_id_time,p_process_io_info_tmp->max_dc_time,p_process_io_info_tmp->max_idc_time,p_process_io_info_tmp->rq_inflght_issue[0],p_process_io_info_tmp->rq_inflght_issue[1],p_process_io_info_tmp->rq_inflght_done[0],p_process_io_info_tmp->rq_inflght_done[1],p_process_io_info_tmp->all_id_time/p_process_io_info_tmp->complete_rq_count,p_process_io_info_tmp->all_dc_time/p_process_io_info_tmp->complete_rq_count,p_process_io_info_tmp->all_idc_time/p_process_io_info_tmp->complete_rq_count);
-		
+	        
 		//对p_process_io_info_tmp对应的进程传输完成的IO请求数清0
 		p_process_io_info_tmp->complete_rq_count = 0;
-		
 		//对max_id_time等清0。但是有一点需要考虑，如果进程正在传输一个IO请求，比如id time很大并赋值给max_id_time，然后派发给驱动，这里对max_id_time等清0。如果这个IO请求的id time很大，那就丢失这个数据了。
 		//好的做法是，判断此时正好有一个IO请求在传输，id time很大，那就不对max_id_time清0
 		p_process_io_info_tmp->max_id_time = 0;
@@ -808,38 +817,75 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		p_process_io_info_tmp->all_id_time = 0;
 		p_process_io_info_tmp->all_dc_time = 0;
 		p_process_io_info_tmp->all_idc_time = 0;
+                spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
 
-                if(p_process_io_info_del)
+                /*if(p_process_io_info_del)
 		{
 		   list_del(&p_process_io_info_del->process_io_info_list);
 		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
 		    p_process_io_info_del = NULL;
-		}
-		if(p_process_io_info_tmp->rq_count == 0)
+		}*/
+		if(atomic_read(&(p_process_io_info_tmp->rq_count)) == 0)
 		{
 			p_process_io_info_tmp->rq_empty_count ++;
 			//释放没有IO请求进程的process_io_info 结构。有没有可能在释放 process_io_info时，此时对应进程来了新的IO请求呢，就使用无效 process_io_info了。不会，由 spin_lock_irq加锁保护
-			if(p_process_io_info_tmp->rq_empty_count == 3)
+			if(p_process_io_info_tmp->rq_empty_count == 5)
 			{
 			     //????????????这里不能delete p_process_io_info_tmp,因为下个for循环，要依赖 p_process_io_info_tmp.next找到下一个链表成员，p_process_io_info_tmp删除后p_process_io_info_tmp.next就可能是个非法值.看下 list_for_each_entry源码就清楚了
 		             //list_del(&p_process_io_info_tmp->process_io_info_list);
 		             //kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
-			     p_process_io_info_del = p_process_io_info_tmp;
+			     //p_process_io_info_del = p_process_io_info_tmp;
+			     
+			     //blk_mq_sched_request_inserted()中会同时向process_io_control_head链表插入process_io_info，这里又要剔除process_io_info，同时多个writer，因此要加锁
+	                     //先从process_io_control_head链表剔除当前的process_io_info但不立即释放
+	                     spin_lock_irq(&(p_process_io_tmp->process_lock_list));
+			     //如果p_process_io_info_tmp->rq_count是0才能真正从链表剔除p_process_io_info_tmp。因为可能blk_mq_sched_request_inserted()此时正好访问到p_process_io_info_tmp，此时
+			     //就不能从链表剔除p_process_io_info_tmp了，更不能释放从链表剔除p_process_io_info_tmp，会导致blk_mq_sched_request_inserted()用的p_process_io_info_tmp是非法内存
+			     //这里spin lock锁加锁防止了这个问题，具体blk_mq_sched_request_inserted()有详细解释
+		             if(atomic_read(&(p_process_io_info_tmp->rq_count)) == 0){
+		                  p_process_io_info_tmp->has_deleted = 1;
+	                          list_del_rcu(&p_process_io_info_tmp->process_io_info_list);
+		             }else{
+			          continue;
+			     }
+	                     spin_unlock_irq(&(p_process_io_tmp->process_lock_list));
+
+			     /*p_process_io_info_tmp从process_io_control_head链表删除后不能立即添加到process_io_control_head_del链表，因为p_process_io_info_tmp指向的process_io_info可能
+			     有进程正在使用，因此不能修改 p_process_io_info_tmp->next值，故不能添加到新链表，这个知识点隐藏的太深了???解决方法是用p_process_io_info_tmp的process_io_info_list_del把
+			     p_process_io_info_tmp添加到 process_io_control_head_del链表*/
+			     //list_add(&p_process_io_info_tmp->process_io_info_list,&(p_process_io_tmp->process_io_control_head_del));
+			     list_add(&p_process_io_info_tmp->process_io_info_list_del,&(p_process_io_tmp->process_io_control_head_del));
 			}
 		}
 		else if(p_process_io_info_tmp->rq_empty_count != 0)
 		{
-		    p_process_io_info_tmp->rq_empty_count = 0;	
+		    p_process_io_info_tmp->rq_empty_count = 0;
 		}
 	}
+        atomic_dec(&(p_process_io_tmp->read_lock_count));//类似 rcu_read_unlock()结束宽限期Grace Period
+
 	/*???????这段代码需要放到加锁里，因为可能此时正好p_process_io_info_del这个process_io_info绑定的进程传输IO，使用了p_process_io_info_del。而现在加了锁，这个进程根本访问不到p_process_io_info_del这个process_io_info。犯了一个错误，错误以为在 list_for_each_entry遍历链表结束后，p_process_io_info_del指向的是链表头结点，而不是链表成员process_io_info，因此这里不能再delete p_process_io_info_del。理解错了，因为链表结束后，p_process_io_info_del指向的是链表最后一个成员
 	  */
-	if(p_process_io_info_del)
+	/*if(p_process_io_info_del)
 	{
 	    list_del(&p_process_io_info_del->process_io_info_list);
 	    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
-	}
-        spin_unlock_irq(&(p_process_io_tmp->process_lock));
+	}*/
+        //spin_unlock_irq(&(p_process_io_tmp->process_lock));
+	
+	while(i ++ < 10)//加锁while循环是一旦 p_process_io_tmp->read_lock_count 不是0，先等等
+	{
+	    //当 read_lock_count 是0，说明process_io_control_head_del上的process_io_info在从process_io_control_head链表剔除后，遍历 process_io_control_head链表的进程都退出了宽限期，可以放心释放了
+	    if(atomic_read(&(p_process_io_tmp->read_lock_count)) == 0){
+		list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head_del), process_io_info_del){
+		    //真正释放process_io_info结构
+		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep,p_process_io_info_tmp);
+		    list_del(&p_process_io_info_tmp->process_io_info_del);
+		}
+		break;
+	    }
+	    msleep(10);
+        }
 }
 EXPORT_SYMBOL(print_process_io_info);
 

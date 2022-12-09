@@ -2119,7 +2119,13 @@ static ssize_t disk_process_rq_stat_store(struct device *dev,
 		{
 		    memset(&disk->process_io,0,sizeof(struct process_io_control));
                     INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
-		    spin_lock_init(&(disk->process_io.process_lock));
+                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head_del));
+		    spin_lock_init(&(disk->process_io.io_data_lock));
+		    spin_lock_init(&(disk->process_io.process_lock_list));
+		    atomic_set(&(disk->process_io.read_lock_count),0);
+		    atomic_set(&(disk->process_io.rq_in_queue),0);
+		    atomic_set(&(disk->process_io.rq_in_driver),0);
+
 		    disk->process_io.process_rq_stat_cachep = KMEM_CACHE(process_rq_stat,0);
                     disk->process_io.process_io_info_cachep = KMEM_CACHE(process_io_info,0);
 

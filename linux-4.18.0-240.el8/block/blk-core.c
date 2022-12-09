@@ -1349,6 +1349,17 @@ void blk_account_io_done(struct request *req, u64 now)
 			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
 			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
 			
+			//spin_lock_irq(&(req->rq_disk->process_io.process_lock));
+			spin_lock_irq(&(req->rq_disk->process_io.io_data_lock));
+			if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){//记录最大的id time
+	                    p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
+		            //??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
+		            //p_process_io_info_tmp->max_id_time_rq = rq;
+		            //记录此时 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
+		            //p_process_io_info_tmp->rq_inflght_issue[0] =  rq->rq_disk->process_io.rq_in_queue;-----------这个要放到io 派发函数里
+		            //p_process_io_info_tmp->rq_inflght_issue[1] =  rq->rq_disk->process_io.rq_in_driver;
+	                }
+
 			if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
 				//记录最大的dc time
 				p_process_io_info_tmp->max_dc_time = p_process_rq_stat_tmp->dc_time;
@@ -1365,20 +1376,28 @@ void blk_account_io_done(struct request *req, u64 now)
 				//p_process_io_info_tmp->max_idc_time_rq = req;
 			}
 
-			spin_lock_irq(&(req->rq_disk->process_io.process_lock));
 			//进程在传输的IO请求数减1
-			p_process_io_info_tmp->rq_count --;
+			//p_process_io_info_tmp->rq_count --;
+	                //在磁盘驱动IO请求数加减，加锁同理，因为同时进程可能在派发IO请求而 rq->rq_disk->process_io.rq_in_driver++
+	                //req->rq_disk->process_io.rq_in_driver --;
+
+			//累加进程的IO请求在队列的时间,需加锁保护，因为同时可能执行print_process_io_info函数清0
+			p_process_io_info_tmp->all_id_time += p_process_rq_stat_tmp->id_time;
 			//累加进程的IO请求在磁盘驱动的时间,需加锁保护，因为同时可能执行print_process_io_info函数清0
 	                p_process_io_info_tmp->all_dc_time += p_process_rq_stat_tmp->dc_time;
 			//累加进程的IO请求在IO队列和磁盘驱动的时间，加锁同理
 	                p_process_io_info_tmp->all_idc_time += p_process_rq_stat_tmp->idc_time;
-	                //在磁盘驱动IO请求数加减，加锁同理，因为同时进程可能在派发IO请求而 rq->rq_disk->process_io.rq_in_driver++
-	                req->rq_disk->process_io.rq_in_driver --;
                         //进程传输完成的IO请求数加1
 			p_process_io_info_tmp->complete_rq_count ++;
-			spin_unlock_irq(&(req->rq_disk->process_io.process_lock));
+			//spin_unlock_irq(&(req->rq_disk->process_io.process_lock));
+			spin_unlock_irq(&(req->rq_disk->process_io.io_data_lock));
+                        
+			//进程在传输的IO请求数减1
+			atomic_dec(&(p_process_io_info_tmp->rq_count));
+	                //在磁盘驱动IO请求数加减，加锁同理，因为同时进程可能在派发IO请求而 rq->rq_disk->process_io.rq_in_driver++
+			atomic_dec(&(req->rq_disk->process_io.rq_in_driver));
 
-			if(p_process_io_info_tmp->rq_count < 0 || req->rq_disk->process_io.rq_in_driver < 0){
+			if(atomic_read(&(p_process_io_info_tmp->rq_count)) < 0 || atomic_read(&(req->rq_disk->process_io.rq_in_driver)) < 0){
 				printk(KERN_DEBUG"%s rq_count:%d rq_in_driver:%d !!!!!!\n",__func__,p_process_io_info_tmp->rq_count,req->rq_disk->process_io.rq_in_driver);
 			}
 			

@@ -425,35 +425,66 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		if(!rq->rq_disk->process_io.process_io_info_cachep || !rq->rq_disk->process_io.process_rq_stat_cachep){
 		    printk(KERN_DEBUG"%s %p %p\n",__func__,rq->rq_disk->process_io.process_io_info_cachep,rq->rq_disk->process_io.process_rq_stat_cachep);
 		}
-                spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
-		list_for_each_entry(p_process_io_info_tmp, &(rq->rq_disk->process_io.process_io_control_head), process_io_info_list){
+                //spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
+                atomic_inc(&(rq->rq_disk->process_io.read_lock_count));//类似 rcu_read_lock()开始宽限期Grace Period
+		//list_for_each_entry(p_process_io_info_tmp, &(rq->rq_disk->process_io.process_io_control_head), process_io_info_list){
+		list_for_each_entry_rcu(p_process_io_info_tmp, &(rq->rq_disk->process_io.process_io_control_head), process_io_info_list){
+
 			if(p_process_io_info_tmp->pid == current->pid){
 		              //????????p_process_io_info_tmp->rq_count ++要放到锁保护里.因为不这样做，这里找到一个p_process_io_info_tmp->rq_count是0，并且p_process_io_info_tmp->rq_empty_count是4的process_io_info，
 			      //还没执行到下边的p_process_io_info_tmp->rq_count ++。而此时process_io线程执行到print_process_io_info()函数，p_process_io_info_tmp->rq_count还是0，此时p_process_io_info_tmp->rq_empty_count++变为5，
 			      //就会释放掉p_process_io_info_tmp结构。此时在blk_mq_sched_request_inserted()函数里，再执行p_process_io_info_tmp->rq_count ++就会crash，因为此时p_process_io_info_tmp这个process_io_info结构释放了
-		              p_process_io_info_tmp->rq_count ++;
-			      rq->rq_disk->process_io.rq_in_queue ++;
+	                      spin_lock_irq(&(p_process_io_tmp->process_lock_list));
+			      //如果p_process_io_info_tmp->has_deleted 是1，说明p_process_io_info_tmp在print_process_io_info()已经被从process_io_control_head链表剔除了。那就跳出循环
+			      //去下边重新分配一个process_io_info。否则令p_process_io_info_tmp->rq_count加1。这样print_process_io_info()函数看到p_process_io_info_tmp->rq_count不是0，就不能再从
+			      //process_io_control_head链表剔除这个p_process_io_info_tmp了。这里有spin_lock_irq加锁保护，可以保证这里 和 print_process_io_info()函数中从process_io_control_head链表剔除
+			      //p_process_io_info_tmp的操作，同时只有一个能执行。要么print_process_io_info()先获取spin_lock锁，则p_process_io_info_tmp被从链表剔除并p_process_io_info_tmp->has_deleted置1，
+			      //要么这里先获取spin lock锁而p_process_io_info_tmp->rq_count加1，这样print_process_io_info()发现p_process_io_info_tmp->rq_count大于0，就不能从链表剔除p_process_io_info_tmp了
+			      //如果没有这个加锁保护，会导致 print_process_io_info()从process_io_control_head链表剔除了p_process_io_info_tmp并释放，然后这里还在使用p_process_io_info_tmp，就非法内存访问了
+			      if(p_process_io_info_tmp->has_deleted)
+			          break;
+			      else{
+			          atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
+                                  atomic_inc(&(p_process_io_info_tmp->rq_count));
+			          /*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
+				  //p_process_io_info_tmp->rq_count 只能得由io_data_lock防护，因为同时blk_account_io_done会rq_count--，需要io_data_lock锁防护
+		                  p_process_io_info_tmp->rq_count ++;
+		                  rq->rq_disk->process_io.rq_in_queue ++;
+		                  spin_unlock_irq(&(rq->rq_disk->process_io.io_data_lock));*/
+		              }
+	                      spin_unlock_irq(&(p_process_io_tmp->process_lock_list));
+			      //rq->rq_disk->process_io.rq_in_queue ++;
                               find = 1;
 			      break;
 			}
 		}
-		spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
+		//spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
+                atomic_dec(&(rq->rq_disk->process_io.read_lock_count));//类似 rcu_read_unlock()结束宽限期Grace Period
 				
-		if(0 == find){
+		if(0 == find){//没有找到与进程匹配的
 		    p_process_io_info_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_io_info_cachep,GFP_ATOMIC);
 		    if(!p_process_io_info_tmp)
 			    goto fail;
 			
 			memset(p_process_io_info_tmp,0,sizeof(struct process_io_info));
-
-                        spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
+			atomic_set(&(p_process_io_info_tmp->rq_count),0);
+                        //向process_io_control_head链表插入process_io_info需要加锁,因为同时在print_process_io_info()函数会从 process_io_control_head链表删除process_io_info，同时多个writer，需要加锁
+                        spin_lock_irq(&(rq->rq_disk->process_io.process_lock_list));
 			//进程在传输的IO请求加1
-		        p_process_io_info_tmp->rq_count ++;
+		        //p_process_io_info_tmp->rq_count ++;
 			//在IO队列的IO请求数加1
-			rq->rq_disk->process_io.rq_in_queue ++;
-			list_add(&p_process_io_info_tmp->process_io_info_list,&(rq->rq_disk->process_io.process_io_control_head));
-		        spin_unlock_irq(&(rq->rq_disk->process_io.process_lock));
+			//rq->rq_disk->process_io.rq_in_queue ++;
+			list_add_rcu(&p_process_io_info_tmp->process_io_info_list,&(rq->rq_disk->process_io.process_io_control_head));//有spin lock锁是不是就不用rcu add了????????????
+		        spin_unlock_irq(&(rq->rq_disk->process_io.process_lock_list));
+                
+			atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
+                        atomic_inc(&(p_process_io_info_tmp->rq_count));
+			/*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
+		        p_process_io_info_tmp->rq_count ++;
+		        rq->rq_disk->process_io.rq_in_queue ++;
+		        spin_unlock_irq(&(rq->rq_disk->process_io.io_data_lock));*/
 	        }
+
 		p_process_rq_stat_tmp = kmem_cache_alloc(rq->rq_disk->process_io.process_rq_stat_cachep,GFP_ATOMIC);
 		if(!p_process_rq_stat_tmp)
 			goto fail;
@@ -473,7 +504,6 @@ void blk_mq_sched_request_inserted(struct request *rq)
 	        if(p_process_io_info_tmp)
 	            kmem_cache_free(rq->rq_disk->process_io.process_io_info_cachep, p_process_io_info_tmp);
 	}
-
 }
 EXPORT_SYMBOL_GPL(blk_mq_sched_request_inserted);
 
