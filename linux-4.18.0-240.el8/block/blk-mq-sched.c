@@ -434,7 +434,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		              //????????p_process_io_info_tmp->rq_count ++要放到锁保护里.因为不这样做，这里找到一个p_process_io_info_tmp->rq_count是0，并且p_process_io_info_tmp->rq_empty_count是4的process_io_info，
 			      //还没执行到下边的p_process_io_info_tmp->rq_count ++。而此时process_io线程执行到print_process_io_info()函数，p_process_io_info_tmp->rq_count还是0，此时p_process_io_info_tmp->rq_empty_count++变为5，
 			      //就会释放掉p_process_io_info_tmp结构。此时在blk_mq_sched_request_inserted()函数里，再执行p_process_io_info_tmp->rq_count ++就会crash，因为此时p_process_io_info_tmp这个process_io_info结构释放了
-	                      spin_lock_irq(&(p_process_io_tmp->process_lock_list));
+	                      spin_lock_irq(&(rq->rq_disk->process_io.process_lock_list));
 			      //如果p_process_io_info_tmp->has_deleted 是1，说明p_process_io_info_tmp在print_process_io_info()已经被从process_io_control_head链表剔除了。那就跳出循环
 			      //去下边重新分配一个process_io_info。否则令p_process_io_info_tmp->rq_count加1。这样print_process_io_info()函数看到p_process_io_info_tmp->rq_count不是0，就不能再从
 			      //process_io_control_head链表剔除这个p_process_io_info_tmp了。这里有spin_lock_irq加锁保护，可以保证这里 和 print_process_io_info()函数中从process_io_control_head链表剔除
@@ -452,7 +452,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		                  rq->rq_disk->process_io.rq_in_queue ++;
 		                  spin_unlock_irq(&(rq->rq_disk->process_io.io_data_lock));*/
 		              }
-	                      spin_unlock_irq(&(p_process_io_tmp->process_lock_list));
+	                      spin_unlock_irq(&(rq->rq_disk->process_io.process_lock_list));
 			      //rq->rq_disk->process_io.rq_in_queue ++;
                               find = 1;
 			      break;

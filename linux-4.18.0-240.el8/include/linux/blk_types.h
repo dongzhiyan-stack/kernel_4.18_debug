@@ -106,9 +106,10 @@ struct process_io_info{
 	//struct request *max_idc_time_rq;
         
 	//进程在派发IO请求时，在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
-        u8  rq_inflght_issue[2];
+        u8  rq_inflght_issue[3];
+        //u8  rq_inflght_issue_tmp[3];
         //进程的IO请求传输完成时，在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
-        u8  rq_inflght_done[2];
+        u8  rq_inflght_done[3];
 	//周期内进程传输完成的IO请求数，每个周期开始时清0，然后进程每传输完成一个IO则加1
         int complete_rq_count;
 	
@@ -127,6 +128,7 @@ struct process_rq_stat{
 	u32 id_time;
 	u32 dc_time;
 	u32 idc_time;
+        u8  rq_inflght_issue_tmp[3];
 	
 	struct process_io_info *p_process_io_info;
 };

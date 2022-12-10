@@ -1349,15 +1349,17 @@ void blk_account_io_done(struct request *req, u64 now)
 			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
 			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
 			
+			/*这里把 process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等都放到spin lock锁里。而print_process_io_info()函数中打印这个进程的process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等数据后，对他们清0，也加了同样的spin lock锁。这个加锁的目的是，保证在print_process_io_info()对他们清0时，不影响process_io_info已经保存了部分这些数据最新数据，但是还没被print_process_io_info()打印使用。简单说，spin lock锁保证了print_process_io_info()对rocess_io_info这些成员清0，不影响数据一致性*/
 			//spin_lock_irq(&(req->rq_disk->process_io.process_lock));
 			spin_lock_irq(&(req->rq_disk->process_io.io_data_lock));
 			if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){//记录最大的id time
 	                    p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
 		            //??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
 		            //p_process_io_info_tmp->max_id_time_rq = rq;
-		            //记录此时 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
-		            //p_process_io_info_tmp->rq_inflght_issue[0] =  rq->rq_disk->process_io.rq_in_queue;-----------这个要放到io 派发函数里
-		            //p_process_io_info_tmp->rq_inflght_issue[1] =  rq->rq_disk->process_io.rq_in_driver;
+
+		            //rq_inflght_issue_tmp保存的是blk_mq_start_request()派发IO请求时的 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
+		            p_process_io_info_tmp->rq_inflght_issue[0] =  p_process_rq_stat_tmp->rq_inflght_issue_tmp[0];
+		            p_process_io_info_tmp->rq_inflght_issue[1] =  p_process_rq_stat_tmp->rq_inflght_issue_tmp[1];
 	                }
 
 			if(p_process_rq_stat_tmp->dc_time > p_process_io_info_tmp->max_dc_time){
@@ -1366,8 +1368,8 @@ void blk_account_io_done(struct request *req, u64 now)
 				//??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
 				//p_process_io_info_tmp->max_dc_time_rq = req;
 				//记录此时 在IO队列的IO请求数 和 在磁盘驱动层的IO请求数
-				p_process_io_info_tmp->rq_inflght_done[0] =  req->rq_disk->process_io.rq_in_queue;
-				p_process_io_info_tmp->rq_inflght_done[1] =  req->rq_disk->process_io.rq_in_driver;
+				p_process_io_info_tmp->rq_inflght_done[0] =  atomic_read(&(req->rq_disk->process_io.rq_in_queue));
+				p_process_io_info_tmp->rq_inflght_done[1] =  atomic_read(&(req->rq_disk->process_io.rq_in_driver));
 			}
 			
 			if(p_process_rq_stat_tmp->idc_time > p_process_io_info_tmp->max_idc_time){
@@ -1398,7 +1400,7 @@ void blk_account_io_done(struct request *req, u64 now)
 			atomic_dec(&(req->rq_disk->process_io.rq_in_driver));
 
 			if(atomic_read(&(p_process_io_info_tmp->rq_count)) < 0 || atomic_read(&(req->rq_disk->process_io.rq_in_driver)) < 0){
-				printk(KERN_DEBUG"%s rq_count:%d rq_in_driver:%d !!!!!!\n",__func__,p_process_io_info_tmp->rq_count,req->rq_disk->process_io.rq_in_driver);
+				printk(KERN_DEBUG"%s rq_count:%d rq_in_driver:%d !!!!!!\n",__func__,atomic_read(&(p_process_io_info_tmp->rq_count)),atomic_read(&(req->rq_disk->process_io.rq_in_driver)));
 			}
 			
 			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
