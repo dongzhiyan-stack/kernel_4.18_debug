@@ -417,6 +417,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 	trace_block_rq_insert(rq->q, rq);
         /******process_rq_stat***************/
 	//if(rq->rq_disk && rq->rq_disk->process_io.enable && (process_io_count < 50)){
+	rq->p_process_rq_stat = NULL;//将rq->p_process_rq_stat强制置为NULL。rq->p_process_rq_stat代表了rq加入process_io_info管控
 	if(rq->rq_disk && rq->rq_disk->process_io.enable){
 		struct process_rq_stat *p_process_rq_stat_tmp = NULL;
 	        struct process_io_info *p_process_io_info_tmp = NULL;
@@ -441,11 +442,21 @@ void blk_mq_sched_request_inserted(struct request *rq)
 			      //p_process_io_info_tmp的操作，同时只有一个能执行。要么print_process_io_info()先获取spin_lock锁，则p_process_io_info_tmp被从链表剔除并p_process_io_info_tmp->has_deleted置1，
 			      //要么这里先获取spin lock锁而p_process_io_info_tmp->rq_count加1，这样print_process_io_info()发现p_process_io_info_tmp->rq_count大于0，就不能从链表剔除p_process_io_info_tmp了
 			      //如果没有这个加锁保护，会导致 print_process_io_info()从process_io_control_head链表剔除了p_process_io_info_tmp并释放，然后这里还在使用p_process_io_info_tmp，就非法内存访问了
-			      if(p_process_io_info_tmp->has_deleted)
+			      if(p_process_io_info_tmp->has_deleted){//实际测试这里确实出现过
+				  //检测到process_io_info 已经delete从这里break，需要先spin unlock，之前忘了，SB，内核处处是坑
+				  spin_unlock_irq(&(rq->rq_disk->process_io.process_lock_list));
 			          break;
-			      else{
-			          atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
+			      }
+			      else
+			      {
+				  //这里不能移动到spin lock锁外,不能！原子变量本身不需要spin lock锁保护。但是这里情况特殊。如果把移动到外。这里 和 执行print_process_io_info()函数的线程
+				  //同时争抢rq_count spin lock锁，但是这里争抢成功。p_process_io_info_tmp->has_deleted 是0，于是执行spin lock锁，然后执行
+				  //atomic_inc(&(p_process_io_info_tmp->rq_count))加1。但是在加1前，spin unlock了，于是print_process_io_info()了，发现rq_count是0，
+				  //那就把p_process_io_info_tmp指向的process_io_info删除了。回到这里，执行atomic_inc(&(p_process_io_info_tmp->rq_count))，继续使用这个process_io_info，
+				  //那就非法内存访问了。老天，同步问题太容易踩坑了，需要有个超级大脑把所有细节都分析到???????????????
                                   atomic_inc(&(p_process_io_info_tmp->rq_count));
+			          //atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
+
 			          /*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
 				  //p_process_io_info_tmp->rq_count 只能得由io_data_lock防护，因为同时blk_account_io_done会rq_count--，需要io_data_lock锁防护
 		                  p_process_io_info_tmp->rq_count ++;
@@ -453,7 +464,9 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		                  spin_unlock_irq(&(rq->rq_disk->process_io.io_data_lock));*/
 		              }
 	                      spin_unlock_irq(&(rq->rq_disk->process_io.process_lock_list));
-			      //rq->rq_disk->process_io.rq_in_queue ++;
+
+			      atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
+                              //atomic_inc(&(p_process_io_info_tmp->rq_count));
                               find = 1;
 			      break;
 			}
@@ -468,6 +481,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 			
 			memset(p_process_io_info_tmp,0,sizeof(struct process_io_info));
 			atomic_set(&(p_process_io_info_tmp->rq_count),0);
+			spin_lock_init(&(p_process_io_info_tmp->io_data_lock));
                         //向process_io_control_head链表插入process_io_info需要加锁,因为同时在print_process_io_info()函数会从 process_io_control_head链表删除process_io_info，同时多个writer，需要加锁
                         spin_lock_irq(&(rq->rq_disk->process_io.process_lock_list));
 			//进程在传输的IO请求加1

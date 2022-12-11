@@ -675,6 +675,13 @@ static void blk_account_io_merge(struct request *req)
 
 		hd_struct_put(part);
 		part_stat_unlock();
+                //req 合并到其他req了，这里释放它，并rq_in_queue减1
+		if(req->rq_disk && req->rq_disk->process_io.enable && req->p_process_rq_stat){
+		    kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
+	            atomic_dec(&(req->rq_disk->process_io.rq_in_queue));
+	            printk(KERN_DEBUG"%s rq:0x%llx merged\n",__func__,(u64)req);
+		    req->p_process_rq_stat = NULL;
+		}
 	}
 }
 /*

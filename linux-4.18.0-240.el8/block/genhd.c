@@ -2075,13 +2075,13 @@ static int process_rq_stat_thread(void *arg)
 {
     struct process_io_control *p_process_io_tmp = (struct process_io_control *)arg;
     while (!kthread_should_stop()) {
-	if(p_process_io_tmp)
+
+	if(p_process_io_tmp && p_process_io_tmp->enable)
             print_process_io_info(p_process_io_tmp);
 
         if(p_process_io_tmp->enable == 0){ 
 	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
-	    if(p_process_io_tmp)
-                free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
+            free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
 	    break;
 	}
 	msleep(1000);
@@ -2120,7 +2120,7 @@ static ssize_t disk_process_rq_stat_store(struct device *dev,
 		    memset(&disk->process_io,0,sizeof(struct process_io_control));
                     INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
                     INIT_LIST_HEAD(&(disk->process_io.process_io_control_head_del));
-		    spin_lock_init(&(disk->process_io.io_data_lock));
+		    spin_lock_init(&(disk->process_io.io_data_lock_));
 		    spin_lock_init(&(disk->process_io.process_lock_list));
 		    atomic_set(&(disk->process_io.read_lock_count),0);
 		    atomic_set(&(disk->process_io.rq_in_queue),0);

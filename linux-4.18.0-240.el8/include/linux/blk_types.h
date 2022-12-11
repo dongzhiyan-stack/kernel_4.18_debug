@@ -68,7 +68,7 @@ typedef u8 __bitwise blk_status_t;
 #define COMM_LEN			16
 struct process_io_control{
         int enable;
-	spinlock_t io_data_lock;
+	spinlock_t io_data_lock_;
 	spinlock_t process_lock_list;
 	//struct rw_semaphore  rw_lock;//读写锁使用时可能休眠，不能用在中断上下文
 	struct list_head process_io_control_head;
@@ -118,6 +118,8 @@ struct process_io_info{
 
 	atomic_t refcount;//list_for_each_entry遍历process_io_info链表时，当前的process_io_info被访问时加1，访问结束减1，在refcount是0时，print_process_io_info()函数中才能释放 process_io_info结构
 	int has_deleted; 
+	spinlock_t io_data_lock;
+	u64  io_size;
 };
 struct process_rq_stat{
 	struct request *rq;
@@ -129,7 +131,8 @@ struct process_rq_stat{
 	u32 dc_time;
 	u32 idc_time;
         u8  rq_inflght_issue_tmp[3];
-	
+	u64 req_size;
+
 	struct process_io_info *p_process_io_info;
 };
 

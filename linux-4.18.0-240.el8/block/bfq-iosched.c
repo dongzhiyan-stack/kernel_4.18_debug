@@ -142,6 +142,8 @@
 #include "blk-wbt.h"
 
 extern int open_bfqq_printk;
+extern int open_bfqq_printk1;
+
 
 #define BFQ_BFQQ_FNS(name)						\
 void bfq_mark_bfqq_##name(struct bfq_queue *bfqq)			\
@@ -1558,7 +1560,7 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 					     bool in_burst,
 					     bool soft_rt)
 {
-        if(open_bfqq_printk)
+        if(open_bfqq_printk1)
 	       printk("1:%s %d %s %d bfqq:%llx old_wr_coeff:%d wr_or_deserves_wr:%d interactive:%d in_burst:%d soft_rt:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,old_wr_coeff,wr_or_deserves_wr,interactive,in_burst,soft_rt);
 	if (old_wr_coeff == 1 && wr_or_deserves_wr) {
 		/* start a weight-raising period */
@@ -5040,8 +5042,8 @@ start_rq:
 		rq->rq_flags |= RQF_STARTED;
 	}
 exit:
-	if(open_bfqq_printk)
-	    printk("5:%s %d %s %d bfqq:%llx req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq);
+	if(open_bfqq_printk1 && bfqq)
+	    printk("5:%s %d %s %d dispatch bfqq:%llx belong to pid:%d req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,(u64)rq);
 	return rq;
 }
 

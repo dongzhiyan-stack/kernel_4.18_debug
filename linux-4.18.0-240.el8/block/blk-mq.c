@@ -723,7 +723,8 @@ void blk_mq_start_request(struct request *rq)
 
 	    p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
 	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
-            
+	    //赋值该req传输的字节数，不能再IO插入队列时更新，必须在IO派发时更新。因为IO插入队列后，可能会合并到其他req，合并到的req的IO字节数会增加。在派发派发时，都是最新的req字节数，不会是被合并的req
+            p_process_rq_stat_tmp->req_size = blk_rq_bytes(rq);            
 	    //spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
 	    /*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
 	    //累加进程的IO请求在队列的时间,需加锁保护，因为同时可能执行print_process_io_info函数清0
@@ -775,26 +776,29 @@ void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
 {
         struct process_io_info *p_process_io_info_tmp = NULL;
 	struct process_io_info *p_process_io_info_del = NULL;
-
         //spin_lock_irq(&(p_process_io_tmp->process_lock));
-	list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
-                if(p_process_io_info_del)
-		{
-		   list_del(&p_process_io_info_del->process_io_info_list);
-		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
-		    p_process_io_info_del = NULL;
-		}
-		p_process_io_info_del = p_process_io_info_tmp;
-	}
-	if(p_process_io_info_del)
-	{
-	    list_del(&p_process_io_info_del->process_io_info_list);
-	    kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_del);
+	list_for_each_entry_safe(p_process_io_info_tmp,p_process_io_info_del,&(p_process_io_tmp->process_io_control_head), process_io_info_list){
+	    list_del(&p_process_io_info_tmp->process_io_info_list);
+            kmem_cache_free(p_process_io_tmp->process_io_info_cachep, p_process_io_info_tmp);
 	}
 	//spin_unlock_irq(&(p_process_io_tmp->process_lock));
-
+	
+        while(1)//加锁while循环是一旦 p_process_io_tmp->read_lock_count 不是0，这里做成死循环，正常情况 p_process_io_tmp->read_lock_count肯定会是0
+	{
+	    //当 read_lock_count 是0，说明process_io_control_head_del上的process_io_info在从process_io_control_head链表剔除后，遍历 process_io_control_head链表的进程都退出了宽限期，可以放心释放了
+	    if(atomic_read(&(p_process_io_tmp->read_lock_count)) == 0){
+		list_for_each_entry_safe(p_process_io_info_tmp,p_process_io_info_del,&(p_process_io_tmp->process_io_control_head_del), process_io_info_del){
+		    list_del(&p_process_io_info_tmp->process_io_info_del);
+		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep,p_process_io_info_tmp);
+		}
+		break;
+	    }
+	    msleep(10);
+        }
+        
 	kmem_cache_destroy(p_process_io_tmp->process_io_info_cachep);
         kmem_cache_destroy(p_process_io_tmp->process_rq_stat_cachep);
+	printk("free_all_process_io_info ok\n");
 }
 EXPORT_SYMBOL(free_all_process_io_info);
 void print_process_io_info(struct process_io_control *p_process_io_tmp)
@@ -810,10 +814,11 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		if(p_process_io_info_tmp->complete_rq_count != 0)//这1s时间内，p_process_io_info_tmp代表的进程必须传输完成一个IO才会统计打印
 		{
 		    int complete_rq_count;
-		    u32 max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time;
+		    u32 max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,io_size;
 
 		    //获取 p_process_io_info_tmp 下边这些参数，最后清0，需要spin lock操作.与blk_account_io_done()对这些参数的赋值形成互斥，保证这里的清0不影响blk_account_io_done()对这些参数的赋值
-	            spin_lock_irq(&(p_process_io_tmp->io_data_lock));
+	            //spin_lock_irq(&(p_process_io_tmp->io_data_lock));
+	            spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
 		    complete_rq_count = p_process_io_info_tmp->complete_rq_count;
 		    max_id_time = p_process_io_info_tmp->max_id_time;
 		    max_dc_time = p_process_io_info_tmp->max_dc_time;
@@ -825,6 +830,7 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    avg_id_time = p_process_io_info_tmp->all_id_time/p_process_io_info_tmp->complete_rq_count;
 		    avg_dc_time = p_process_io_info_tmp->all_dc_time/p_process_io_info_tmp->complete_rq_count;
 		    avg_idc_time = p_process_io_info_tmp->all_idc_time/p_process_io_info_tmp->complete_rq_count;
+		    io_size = (p_process_io_info_tmp->io_size)>>20;//除以1024*1024转成单位M
 
 		    //对p_process_io_info_tmp对应的进程传输完成的IO请求数清0
 		    p_process_io_info_tmp->complete_rq_count = 0;
@@ -838,9 +844,12 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    p_process_io_info_tmp->all_id_time = 0;
 		    p_process_io_info_tmp->all_dc_time = 0;
 		    p_process_io_info_tmp->all_idc_time = 0;
-		    spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
+
+		    p_process_io_info_tmp->io_size = 0;
+		    //spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
+		    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 	            
-		    printk("%s %d rq_count:%d max_id_time:%dus max_dc_time:%dus max_idc_time:%dus rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time);
+		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time);
 		
 		    if(p_process_io_info_tmp->rq_empty_count != 0)
 		    {
@@ -868,6 +877,8 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		                  p_process_io_info_tmp->has_deleted = 1;
 	                          list_del_rcu(&p_process_io_info_tmp->process_io_info_list);
 		             }else{
+				  //这里跳到for...循环头，最初忘记spin unlock了，态SB，内核处处都是坑????????????????????????????
+	                          spin_unlock_irq(&(p_process_io_tmp->process_lock_list));
 			          continue;
 			     }
 	                     spin_unlock_irq(&(p_process_io_tmp->process_lock_list));
@@ -897,6 +908,7 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 	    //当 read_lock_count 是0，说明process_io_control_head_del上的process_io_info在从process_io_control_head链表剔除后，遍历 process_io_control_head链表的进程都退出了宽限期，可以放心释放了
 	    if(atomic_read(&(p_process_io_tmp->read_lock_count)) == 0){
 		list_for_each_entry_safe(p_process_io_info_tmp,p_process_io_info_tmp_copy,&(p_process_io_tmp->process_io_control_head_del), process_io_info_del){
+		    printk(KERN_DEBUG"%s %s %d process_io_info delete\n",__func__,p_process_io_info_tmp->comm,p_process_io_info_tmp->pid);
 		    list_del(&p_process_io_info_tmp->process_io_info_del);
 		    //真正释放process_io_info结构
 		    kmem_cache_free(p_process_io_tmp->process_io_info_cachep,p_process_io_info_tmp);

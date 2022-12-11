@@ -1351,7 +1351,8 @@ void blk_account_io_done(struct request *req, u64 now)
 			
 			/*这里把 process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等都放到spin lock锁里。而print_process_io_info()函数中打印这个进程的process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等数据后，对他们清0，也加了同样的spin lock锁。这个加锁的目的是，保证在print_process_io_info()对他们清0时，不影响process_io_info已经保存了部分这些数据最新数据，但是还没被print_process_io_info()打印使用。简单说，spin lock锁保证了print_process_io_info()对rocess_io_info这些成员清0，不影响数据一致性*/
 			//spin_lock_irq(&(req->rq_disk->process_io.process_lock));
-			spin_lock_irq(&(req->rq_disk->process_io.io_data_lock));
+			//spin_lock_irq(&(req->rq_disk->process_io.io_data_lock));//???????????????????这里的spin lock不要弄成基于process_io_control的全局锁，而是做成基于进程自己process_io_info的锁。这样可以避免多个进程IO请求传输完成在这里都要抢占 req->rq_disk->process_io.io_data_lock 锁
+			spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
 			if(p_process_rq_stat_tmp->id_time > p_process_io_info_tmp->max_id_time){//记录最大的id time
 	                    p_process_io_info_tmp->max_id_time = p_process_rq_stat_tmp->id_time;
 		            //??????没必要再记录req指针了，因为req释放后会立即被新的进程使用，这样req指针就不能代表某个进程了
@@ -1389,10 +1390,14 @@ void blk_account_io_done(struct request *req, u64 now)
 	                p_process_io_info_tmp->all_dc_time += p_process_rq_stat_tmp->dc_time;
 			//累加进程的IO请求在IO队列和磁盘驱动的时间，加锁同理
 	                p_process_io_info_tmp->all_idc_time += p_process_rq_stat_tmp->idc_time;
-                        //进程传输完成的IO请求数加1
+                        //进程传输完成的IO请求数加1，需要加锁保护
 			p_process_io_info_tmp->complete_rq_count ++;
+
+			//累加进程派发的IO请求字节数。在执行到该函数时，rq->__data_len已经被清0了，因此需要用提前保存的p_process_rq_stat_tmp->req_size，也是req、
+			p_process_io_info_tmp->io_size += p_process_rq_stat_tmp->req_size;
 			//spin_unlock_irq(&(req->rq_disk->process_io.process_lock));
-			spin_unlock_irq(&(req->rq_disk->process_io.io_data_lock));
+			//spin_unlock_irq(&(req->rq_disk->process_io.io_data_lock));
+			spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
                         
 			//进程在传输的IO请求数减1
 			atomic_dec(&(p_process_io_info_tmp->rq_count));
@@ -1405,7 +1410,12 @@ void blk_account_io_done(struct request *req, u64 now)
 			
 			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
 		        req->p_process_rq_stat = NULL;	
-	        }
+	        }//req->rq_disk->process_io.enable 是0，但是req->p_process_rq_stat非NULL，说明之前使能了process_io，现在禁止了，那需要在这里释放rocess_rq_stat，否则内存泄漏
+		else if(req->rq_disk && req->p_process_rq_stat && (req->rq_disk->process_io.enable == 0))
+		{
+		    kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
+		    req->p_process_rq_stat = NULL;	
+		}
 	}
 }
 
