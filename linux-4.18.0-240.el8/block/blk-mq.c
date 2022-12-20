@@ -709,6 +709,7 @@ void blk_mq_start_request(struct request *rq)
 	if (blk_integrity_rq(rq) && req_op(rq) == REQ_OP_WRITE)
 		q->integrity.profile->ext_ops->prepare_fn(rq);
 #endif
+	//一个req可能多次执行blk_mq_start_request()派发IO请求，因此派发时可能遇到驱动繁忙，这样就会再次派发该IO
 	/******process_rq_stat***************/
         if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
             struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
@@ -717,12 +718,15 @@ void blk_mq_start_request(struct request *rq)
 	    if(p_process_rq_stat_tmp->rq_issue_time == 0){
 	        atomic_dec(&(rq->rq_disk->process_io.rq_in_queue));
 	        atomic_inc(&(rq->rq_disk->process_io.rq_in_driver));
+	        p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
+	        p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
 	    }else{
 	        printk(KERN_DEBUG"%s rq:0x%llx repeat dispatch\n",__func__,(u64)rq);
 	    }
 
-	    p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
-	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;
+	    /*p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
+	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;*/
+
 	    //赋值该req传输的字节数，不能再IO插入队列时更新，必须在IO派发时更新。因为IO插入队列后，可能会合并到其他req，合并到的req的IO字节数会增加。在派发派发时，都是最新的req字节数，不会是被合并的req
             p_process_rq_stat_tmp->req_size = blk_rq_bytes(rq);            
 	    //spin_lock_irq(&(rq->rq_disk->process_io.process_lock));
@@ -814,7 +818,7 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		if(p_process_io_info_tmp->complete_rq_count != 0)//这1s时间内，p_process_io_info_tmp代表的进程必须传输完成一个IO才会统计打印
 		{
 		    int complete_rq_count;
-		    u32 max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,io_size;
+		    u32 max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,io_size,max_real_dc_time,max_hctx_list_rq_count;
 
 		    //获取 p_process_io_info_tmp 下边这些参数，最后清0，需要spin lock操作.与blk_account_io_done()对这些参数的赋值形成互斥，保证这里的清0不影响blk_account_io_done()对这些参数的赋值
 	            //spin_lock_irq(&(p_process_io_tmp->io_data_lock));
@@ -832,6 +836,9 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    avg_idc_time = p_process_io_info_tmp->all_idc_time/p_process_io_info_tmp->complete_rq_count;
 		    io_size = (p_process_io_info_tmp->io_size)>>20;//除以1024*1024转成单位M
 
+		    max_hctx_list_rq_count = p_process_io_info_tmp->max_hctx_list_rq_count;
+		    max_real_dc_time = p_process_io_info_tmp->max_real_dc_time;
+
 		    //对p_process_io_info_tmp对应的进程传输完成的IO请求数清0
 		    p_process_io_info_tmp->complete_rq_count = 0;
 		    //对max_id_time等清0。但是有一点需要考虑，如果进程正在传输一个IO请求，比如id time很大并赋值给max_id_time，然后派发给驱动，这里对max_id_time等清0。如果这个IO请求的id time很大，那就丢失这个数据了。
@@ -846,10 +853,13 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    p_process_io_info_tmp->all_idc_time = 0;
 
 		    p_process_io_info_tmp->io_size = 0;
+		    p_process_io_info_tmp->max_hctx_list_rq_count = 0;
+		    p_process_io_info_tmp->max_real_dc_time = 0;
+
 		    //spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
 		    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 	            
-		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time);
+		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus max_real_dc_time:%dus max_hctx_list_rq:%d rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,max_real_dc_time,max_hctx_list_rq_count,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time);
 		
 		    if(p_process_io_info_tmp->rq_empty_count != 0)
 		    {
@@ -1381,6 +1391,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 	int errors, queued;
 	blk_status_t ret = BLK_STS_OK;
 	bool no_budget_avail = false;
+        int rq_pid = -1;
 
 	if (list_empty(list))
 		return false;
@@ -1427,6 +1438,12 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 
 		bd.rq = rq;
 
+
+		/******process_rq_stat***************/
+                if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+		    //先保存rq所属进程PID
+		    rq_pid = rq->p_process_rq_stat->p_process_io_info->pid;
+		}
 		/*
 		 * Flag last if we have no more requests, or if we have more
 		 * but can't assign a driver tag to it.
@@ -1437,7 +1454,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			nxt = list_first_entry(list, struct request, queuelist);
 			bd.last = !blk_mq_get_driver_tag(nxt);
 		}
-
+                //从该函数返回BLK_STS_OK，有时rq派发成功，有时失败，随机
 		ret = q->mq_ops->queue_rq(hctx, &bd);
 		if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE) {
 			/*
@@ -1460,6 +1477,41 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			continue;
 		}
 
+		/******process_rq_stat***************/
+		smp_rmb(); 
+                if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat && rq->p_process_rq_stat->p_process_io_info){
+	            struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
+		    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+		    //??????????执行到这里，rq这个IO请求可能还没派发完成，此时执行blk_account_io_done()里的p_process_rq_stat_tmp->real_dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_real_issue_time计算的real_dc_time是准确的。
+		    //但是也可能已经派发完成并执行了 blk_account_io_done()里的计算real_dc_time的代码，此时p_process_rq_stat_tmp->rq_real_issue_time还没在下边赋值，是0。
+		    //当然这种情况计算的real_dc_time是有问题的，非常大。并且这个rq很快又被新的进程分配，并分配rq->p_process_rq_stat。此时执行到这里，就会错误执行
+		    //p_process_rq_stat_tmp->rq_real_issue_time = ktime_to_us(ktime_get()) 赋值。此时这个rq被赋值了新的进程，只是插入IO队列，还没有派发！简单说rq->p_process_rq_stat
+		    //已经是新分配的了。等这个rq接下来真的被派发，执行到这里就会发现p_process_rq_stat_tmp->rq_real_issue_time不是0，这个奇怪的现象就可以解释了
+		    //
+		    //还有一种情况是，执行到这里时，rq正好派发完成执行blk_account_io_done()函数，rq->p_process_rq_stat还没清NULL，
+		    //因此这里的if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat)成立，这里的p_process_rq_stat_tmp->rq_real_issue_time = ktime_to_us(ktime_get());
+		    //和 blk_account_io_done()里的p_process_rq_stat_tmp->real_dc_time = ktime_to_us(ktime_get())-p_process_rq_stat_tmp->rq_real_issue_time就会同时执行，谁前谁后不一定。
+		    //这样可能blk_account_io_done()里先ktime_to_us(ktime_get())，然后该函数这里对p_process_rq_stat_tmp->rq_real_issue_time赋值，此时real_dc_time就是负数。要加锁保护
+		    //
+		    
+		    printk(KERN_DEBUG"1:%s rp_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
+		    //smp_rmb(); 
+                    //这里的printk打印p_process_io_info是0xffff9fec1e15d100，但是if(rq_pid == rq->p_process_rq_stat->p_process_io_info->pid)却因p_process_io_info NULL而crash了
+		    printk(KERN_DEBUG"2:%s p_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
+		    if(rq->p_process_rq_stat &&(rq_pid == rq->p_process_rq_stat->p_process_io_info->pid))//rq如果派发的快，到这里可能已经传输完成并被新的进程分配，这个判断限制rq不能被新的分配
+		    {
+		        if(p_process_rq_stat_tmp->rq_real_issue_time == 0){
+			    spin_lock_irq(&(p_process_io_info_tmp->io_data_lock)); 
+		            p_process_rq_stat_tmp->rq_real_issue_time = ktime_to_us(ktime_get());
+			    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
+			}
+		        else
+			{
+		            printk(KERN_DEBUG"%s rq_real_issue_time:%llu rq_issue_time:%llu rq_inset_time:%llu p_process_io_info_tmp:%p\n",__func__,p_process_rq_stat_tmp->rq_real_issue_time,p_process_rq_stat_tmp->rq_issue_time,p_process_rq_stat_tmp->rq_inset_time,p_process_io_info_tmp);
+		//	    dump_stack();
+		        }
+		    }
+		}
 		queued++;
 	} while (!list_empty(list));
 

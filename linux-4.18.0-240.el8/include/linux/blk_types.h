@@ -83,6 +83,8 @@ struct process_io_control{
 	//int rq_in_driver;
 	atomic_t rq_in_driver;
 	atomic_t read_lock_count;
+	//统计 hctx->dispatch 链表上有多少个req在等待派发
+	int max_hctx_list_rq_count;
 };
 struct process_io_info{
 	int pid;
@@ -96,10 +98,12 @@ struct process_io_info{
 	u32 max_id_time;//IO请求在IO队列最长的停留时间(进程的)
 	u32 max_dc_time;//IO请求在磁盘驱动层的最长耗时(进程的)
 	u32 max_idc_time;//IO请求从插入队列到传输完成的最大总耗时(进程的)
+	u32 max_real_dc_time;
 
 	u32 all_id_time;//进程传输的每个IO请求在队列停留时间之和
 	u32 all_dc_time;//进程传输的IO请求在磁盘驱动层的耗时之和
 	u32 all_idc_time;//进程传输的IO请求插入队列到传输完成时间之和
+	u32 all_real_dc_time;
 	
 	//struct request *max_id_time_rq;
 	//struct request *max_dc_time_rq;
@@ -120,15 +124,19 @@ struct process_io_info{
 	int has_deleted; 
 	spinlock_t io_data_lock;
 	u64  io_size;
+	//统计 hctx->dispatch 链表上有多少个req在等待派发
+	int max_hctx_list_rq_count;
 };
 struct process_rq_stat{
 	struct request *rq;
 	
 	u64 rq_inset_time;
 	u64 rq_issue_time;
+	u64 rq_real_issue_time;
 	
 	u32 id_time;
 	u32 dc_time;
+	u32 real_dc_time;
 	u32 idc_time;
         u8  rq_inflght_issue_tmp[3];
 	u64 req_size;

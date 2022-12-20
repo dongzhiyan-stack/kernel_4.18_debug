@@ -213,7 +213,27 @@ static int blk_mq_do_dispatch_ctx(struct blk_mq_hw_ctx *hctx)
 	WRITE_ONCE(hctx->dispatch_from, ctx);
 	return ret;
 }
+static void dispatch_list_rq_count(struct list_head *hctx_list_head)
+{
+    struct request *rq = list_first_entry(hctx_list_head, struct request, queuelist);
+    if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+        int count = 0;
+        struct request *tmp;
+	struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
 
+	//统计 hctx->dispatch 链表上有多少个req在等待派发，统计到max_hctx_list_rq_count
+        list_for_each_entry(tmp,hctx_list_head,queuelist){
+            count ++;
+        }
+	spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
+        if(count > p_process_io_info_tmp->max_hctx_list_rq_count){
+	    p_process_io_info_tmp->max_hctx_list_rq_count = count;
+	}
+	spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
+	if(count > 0)
+	    printk("%s count:%d\n",__func__,count);
+    }
+}
 int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -229,7 +249,12 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	if (!list_empty_careful(&hctx->dispatch)) {
 		spin_lock(&hctx->lock);
 		if (!list_empty(&hctx->dispatch))
+	        {
+			/******process_rq_stat***************/
+			dispatch_list_rq_count(&hctx->dispatch);
+
 			list_splice_init(&hctx->dispatch, &rq_list);
+		}
 		spin_unlock(&hctx->lock);
 	}
 
@@ -508,6 +533,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		strncpy(p_process_io_info_tmp->comm,current->comm,COMM_LEN-1);
 		
 		p_process_rq_stat_tmp->p_process_io_info = p_process_io_info_tmp;
+		//smp_mb();
 		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
 		rq->p_process_rq_stat = p_process_rq_stat_tmp;
 
