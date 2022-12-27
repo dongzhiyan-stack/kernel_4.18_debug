@@ -723,6 +723,7 @@ void blk_mq_start_request(struct request *rq)
 	    }else{
 	        printk(KERN_DEBUG"%s rq:0x%llx repeat dispatch\n",__func__,(u64)rq);
 	    }
+            printk(KERN_DEBUG"%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d  rq_real_issue_time:%lld\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
 
 	    /*p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
 	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;*/
@@ -1392,6 +1393,8 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 	blk_status_t ret = BLK_STS_OK;
 	bool no_budget_avail = false;
         int rq_pid = -1;
+	struct process_rq_stat *p_process_rq_stat_tmp = NULL;
+        struct process_io_info *p_process_io_info_tmp = NULL;
 
 	if (list_empty(list))
 		return false;
@@ -1443,6 +1446,9 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
                 if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
 		    //先保存rq所属进程PID
 		    rq_pid = rq->p_process_rq_stat->p_process_io_info->pid;
+	            p_process_rq_stat_tmp = rq->p_process_rq_stat;
+		    p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+		    /*printk(KERN_DEBUG"1:%s %s %d\n",__func__,current->comm,current->pid);*/
 		}
 		/*
 		 * Flag last if we have no more requests, or if we have more
@@ -1478,10 +1484,12 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		}
 
 		/******process_rq_stat***************/
-		smp_rmb(); 
-                if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat && rq->p_process_rq_stat->p_process_io_info){
-	            struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
-		    struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+		//smp_rmb(); 
+                //if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat && rq->p_process_rq_stat->p_process_io_info){
+                if(rq->rq_disk && rq->rq_disk->process_io.enable && p_process_rq_stat_tmp && p_process_io_info_tmp){
+	            //struct process_rq_stat *p_process_rq_stat_tmp = rq->p_process_rq_stat;
+		    //struct process_io_info *p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+
 		    //??????????执行到这里，rq这个IO请求可能还没派发完成，此时执行blk_account_io_done()里的p_process_rq_stat_tmp->real_dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_real_issue_time计算的real_dc_time是准确的。
 		    //但是也可能已经派发完成并执行了 blk_account_io_done()里的计算real_dc_time的代码，此时p_process_rq_stat_tmp->rq_real_issue_time还没在下边赋值，是0。
 		    //当然这种情况计算的real_dc_time是有问题的，非常大。并且这个rq很快又被新的进程分配，并分配rq->p_process_rq_stat。此时执行到这里，就会错误执行
@@ -1494,23 +1502,30 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		    //这样可能blk_account_io_done()里先ktime_to_us(ktime_get())，然后该函数这里对p_process_rq_stat_tmp->rq_real_issue_time赋值，此时real_dc_time就是负数。要加锁保护
 		    //
 		    
-		    printk(KERN_DEBUG"1:%s rp_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
+		    //printk(KERN_DEBUG"1:%s rp_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
 		    //smp_rmb(); 
                     //这里的printk打印p_process_io_info是0xffff9fec1e15d100，但是if(rq_pid == rq->p_process_rq_stat->p_process_io_info->pid)却因p_process_io_info NULL而crash了
-		    printk(KERN_DEBUG"2:%s p_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
+		    //printk(KERN_DEBUG"2:%s p_process_io_info:0x%llx\n",__func__,(u64)(rq->p_process_rq_stat->p_process_io_info));
+		    
+		    /*printk(KERN_DEBUG"2:%s %s %d\n",__func__,current->comm,current->pid);*/
+
+		    spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
 		    if(rq->p_process_rq_stat &&(rq_pid == rq->p_process_rq_stat->p_process_io_info->pid))//rq如果派发的快，到这里可能已经传输完成并被新的进程分配，这个判断限制rq不能被新的分配
 		    {
 		        if(p_process_rq_stat_tmp->rq_real_issue_time == 0){
-			    spin_lock_irq(&(p_process_io_info_tmp->io_data_lock)); 
+			    //spin_lock_irq(&(p_process_io_info_tmp->io_data_lock)); 
 		            p_process_rq_stat_tmp->rq_real_issue_time = ktime_to_us(ktime_get());
-			    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
+			    smp_mb();
+		            printk("%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_real_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_real_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
+			    //spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 			}
 		        else
 			{
-		            printk(KERN_DEBUG"%s rq_real_issue_time:%llu rq_issue_time:%llu rq_inset_time:%llu p_process_io_info_tmp:%p\n",__func__,p_process_rq_stat_tmp->rq_real_issue_time,p_process_rq_stat_tmp->rq_issue_time,p_process_rq_stat_tmp->rq_inset_time,p_process_io_info_tmp);
+		            printk(KERN_ERR"!!!!!!!!!!%s %s %d rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%llu rq_issue_time:%llu rq_inset_time:%llu\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time,p_process_rq_stat_tmp->rq_issue_time,p_process_rq_stat_tmp->rq_inset_time);
 		//	    dump_stack();
 		        }
 		    }
+		    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 		}
 		queued++;
 	} while (!list_empty(list));

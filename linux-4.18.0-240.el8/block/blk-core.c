@@ -1348,6 +1348,7 @@ void blk_account_io_done(struct request *req, u64 now)
 
 			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
 			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
+			printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d\n",__func__,(u64)req,(u64)(req->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
 			//p_process_rq_stat_tmp->real_dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_real_issue_time;
 			
 			/*这里把 process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等都放到spin lock锁里。而print_process_io_info()函数中打印这个进程的process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等数据后，对他们清0，也加了同样的spin lock锁。这个加锁的目的是，保证在print_process_io_info()对他们清0时，不影响process_io_info已经保存了部分这些数据最新数据，但是还没被print_process_io_info()打印使用。简单说，spin lock锁保证了print_process_io_info()对rocess_io_info这些成员清0，不影响数据一致性*/
@@ -1356,6 +1357,7 @@ void blk_account_io_done(struct request *req, u64 now)
 		
 			
 			spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
+		        req->p_process_rq_stat = NULL;
 			
 			//如果rq派发的非常快，可能先执行这里而还没执行到blk_mq_dispatch_rq_list()里对rq_real_issue_time的赋值，rq_real_issue_time是0。这种情况就默认real_dc_time是0
 			//并且要把对real_dc_time的赋值用spin_lock_irq锁保护，因为可能跟 blk_mq_dispatch_rq_list()对rq_real_issue_time的赋值冲突
@@ -1423,7 +1425,7 @@ void blk_account_io_done(struct request *req, u64 now)
 			
 		        //smp_mb();	
 			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
-		        req->p_process_rq_stat = NULL;
+		        //req->p_process_rq_stat = NULL;
 	        }//req->rq_disk->process_io.enable 是0，但是req->p_process_rq_stat非NULL，说明之前使能了process_io，现在禁止了，那需要在这里释放rocess_rq_stat，否则内存泄漏
 		else if(req->rq_disk && req->p_process_rq_stat && (req->rq_disk->process_io.enable == 0))
 		{

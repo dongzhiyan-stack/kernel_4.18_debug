@@ -533,9 +533,10 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		strncpy(p_process_io_info_tmp->comm,current->comm,COMM_LEN-1);
 		
 		p_process_rq_stat_tmp->p_process_io_info = p_process_io_info_tmp;
-		//smp_mb();
+		smp_mb();
 		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
 		rq->p_process_rq_stat = p_process_rq_stat_tmp;
+		printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx rq_inset_time:%lld  p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%lld\n",__func__,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_inset_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
 
 		return;
 	fail:
