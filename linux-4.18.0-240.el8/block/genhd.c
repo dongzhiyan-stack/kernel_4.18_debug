@@ -1249,6 +1249,122 @@ static ssize_t disk_discard_alignment_show(struct device *dev,
 	return sprintf(buf, "%d\n", queue_discard_alignment(disk->queue));
 }
 
+/******process_rq_stat***************/
+#include <linux/delay.h>
+extern void print_process_io_info(struct process_io_control *p_process_io_tmp);
+extern void free_all_process_io_info(struct process_io_control *p_process_io_tmp);
+static int process_rq_stat_thread(void *arg)
+{
+    struct process_io_control *p_process_io_tmp = (struct process_io_control *)arg;
+    while (!kthread_should_stop()) {
+
+	if(p_process_io_tmp && p_process_io_tmp->enable)
+            print_process_io_info(p_process_io_tmp);
+
+        if(p_process_io_tmp->enable == 0){ 
+	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
+            free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
+	    break;
+	}
+	msleep(1000);
+    }
+    p_process_io_tmp->kernel_thread = NULL;
+    return 0;
+}
+static ssize_t disk_process_rq_stat_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+
+	return sprintf(buf, "%d\n", disk->process_io.enable);
+}
+static ssize_t disk_process_rq_stat_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	long intv;
+
+	if (!count || !sscanf(buf, "%ld", &intv))
+		return -EINVAL;
+
+	if (!(intv == 0 || intv == 1))
+		return -EINVAL;
+    
+	if(disk->process_io.enable != intv){
+		//??????这里把 disk->process_io.enable = intv注释掉，而放后边，是因为。在设置1使能后，process_rq_stat_cachep、process_io_info_cachep、process_io_control_head等立即还未初始化，而此时blk_mq_sched_request_inserted函数里，就可能因为disk->process_io.enable是1而从process_rq_stat_cachep、process_io_info_cachep 分配结构体，此时肯定要crash了
+	        //disk->process_io.enable = intv;
+         	//if(disk->process_io.enable == 1)
+		
+		if(intv)
+		{
+		    memset(&disk->process_io,0,sizeof(struct process_io_control));
+                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
+                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head_del));
+                    INIT_LIST_HEAD(&(disk->process_io.process_io_insert_head));
+		    
+		    spin_lock_init(&(disk->process_io.io_data_lock_));
+		    spin_lock_init(&(disk->process_io.process_lock_list));
+		    spin_lock_init(&(disk->process_io.process_io_insert_lock));
+
+		    atomic_set(&(disk->process_io.read_lock_count),0);
+		    atomic_set(&(disk->process_io.rq_in_queue),0);
+		    atomic_set(&(disk->process_io.rq_in_driver),0);
+
+		    disk->process_io.process_rq_stat_cachep = KMEM_CACHE(process_rq_stat,0);
+                    disk->process_io.process_io_info_cachep = KMEM_CACHE(process_io_info,0);
+
+	            disk->process_io.kernel_thread = kthread_create(process_rq_stat_thread,(void *)&disk->process_io,"process_rq_stat");
+	            if (IS_ERR(disk->process_io.kernel_thread )) {
+				printk("%s kthread_create fail\n",__func__);
+			}else{
+			    wake_up_process(disk->process_io.kernel_thread);
+		        }
+		}
+		disk->process_io.enable = intv;
+       }
+       return count;
+}
+static ssize_t disk_process_high_io_prio_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+
+	return sprintf(buf, "%d\n",disk->queue->high_io_prio_enable);
+}
+static ssize_t disk_process_high_io_prio_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	long intv;
+
+	if (!count || !sscanf(buf, "%ld", &intv))
+		return -EINVAL;
+
+	if (!(intv == 0 || intv == 1))
+		return -EINVAL;
+    
+       if(disk->queue->high_io_prio_enable != intv){
+           disk->queue->high_io_prio_enable = intv;
+	   if(intv){
+	       disk->queue->high_io_prio_mode = 0;
+	       disk->queue->high_io_prio_limit = 0;
+	       atomic_set(&(disk->queue->process_io.rq_in_queue),0);
+	   }
+       }
+       return count;
+}
+
+static DEVICE_ATTR(process_rq_stat, 0644,
+			 disk_process_rq_stat_show,
+			 disk_process_rq_stat_store);
+static DEVICE_ATTR(process_high_io_prio, 0644,
+			 disk_process_high_io_prio_show,
+			 disk_process_high_io_prio_store);
+
 static DEVICE_ATTR(range, 0444, disk_range_show, NULL);
 static DEVICE_ATTR(ext_range, 0444, disk_ext_range_show, NULL);
 static DEVICE_ATTR(removable, 0444, disk_removable_show, NULL);
@@ -1289,6 +1405,8 @@ static struct attribute *disk_attrs[] = {
 #ifdef CONFIG_FAIL_IO_TIMEOUT
 	&dev_attr_fail_timeout.attr,
 #endif
+	&dev_attr_process_rq_stat.attr,
+	&dev_attr_process_high_io_prio.attr,
 	NULL
 };
 
@@ -2067,82 +2185,6 @@ static ssize_t disk_events_poll_msecs_store(struct device *dev,
 	return count;
 }
 
-/******process_rq_stat***************/
-#include <linux/delay.h>
-extern void print_process_io_info(struct process_io_control *p_process_io_tmp);
-extern void free_all_process_io_info(struct process_io_control *p_process_io_tmp);
-static int process_rq_stat_thread(void *arg)
-{
-    struct process_io_control *p_process_io_tmp = (struct process_io_control *)arg;
-    while (!kthread_should_stop()) {
-
-	if(p_process_io_tmp && p_process_io_tmp->enable)
-            print_process_io_info(p_process_io_tmp);
-
-        if(p_process_io_tmp->enable == 0){ 
-	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
-            free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
-	    break;
-	}
-	msleep(1000);
-    }
-    p_process_io_tmp->kernel_thread = NULL;
-    return 0;
-}
-static ssize_t disk_process_rq_stat_show(struct device *dev,
-					   struct device_attribute *attr,
-					   char *buf)
-{
-	struct gendisk *disk = dev_to_disk(dev);
-
-	return sprintf(buf, "%d\n", disk->process_io.enable);
-}
-static ssize_t disk_process_rq_stat_store(struct device *dev,
-					    struct device_attribute *attr,
-					    const char *buf, size_t count)
-{
-	struct gendisk *disk = dev_to_disk(dev);
-	long intv;
-
-	if (!count || !sscanf(buf, "%ld", &intv))
-		return -EINVAL;
-
-	if (!(intv == 0 || intv == 1))
-		return -EINVAL;
-    
-	if(disk->process_io.enable != intv){
-		//??????这里把 disk->process_io.enable = intv注释掉，而放后边，是因为。在设置1使能后，process_rq_stat_cachep、process_io_info_cachep、process_io_control_head等立即还未初始化，而此时blk_mq_sched_request_inserted函数里，就可能因为disk->process_io.enable是1而从process_rq_stat_cachep、process_io_info_cachep 分配结构体，此时肯定要crash了
-	        //disk->process_io.enable = intv;
-         	//if(disk->process_io.enable == 1)
-		
-		if(intv)
-		{
-		    memset(&disk->process_io,0,sizeof(struct process_io_control));
-                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head));
-                    INIT_LIST_HEAD(&(disk->process_io.process_io_control_head_del));
-		    spin_lock_init(&(disk->process_io.io_data_lock_));
-		    spin_lock_init(&(disk->process_io.process_lock_list));
-		    atomic_set(&(disk->process_io.read_lock_count),0);
-		    atomic_set(&(disk->process_io.rq_in_queue),0);
-		    atomic_set(&(disk->process_io.rq_in_driver),0);
-
-		    disk->process_io.process_rq_stat_cachep = KMEM_CACHE(process_rq_stat,0);
-                    disk->process_io.process_io_info_cachep = KMEM_CACHE(process_io_info,0);
-
-	            disk->process_io.kernel_thread = kthread_create(process_rq_stat_thread,(void *)&disk->process_io,"process_rq_stat");
-	            if (IS_ERR(disk->process_io.kernel_thread )) {
-				printk("%s kthread_create fail\n",__func__);
-			}else{
-			    wake_up_process(disk->process_io.kernel_thread);
-		        }
-		}
-		disk->process_io.enable = intv;
-       }
-       return count;
-}
-static const DEVICE_ATTR(process_rq_stat, 0644,
-			 disk_process_rq_stat_show,
-			 disk_process_rq_stat_store);
 
 static const DEVICE_ATTR(events, 0444, disk_events_show, NULL);
 static const DEVICE_ATTR(events_async, 0444, disk_events_async_show, NULL);
@@ -2154,7 +2196,7 @@ static const struct attribute *disk_events_attrs[] = {
 	&dev_attr_events.attr,
 	&dev_attr_events_async.attr,
 	&dev_attr_events_poll_msecs.attr,
-	&dev_attr_process_rq_stat.attr,
+	//&dev_attr_process_rq_stat.attr,
 	NULL,
 };
 

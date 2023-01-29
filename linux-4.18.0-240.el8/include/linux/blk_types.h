@@ -70,9 +70,11 @@ struct process_io_control{
         int enable;
 	spinlock_t io_data_lock_;
 	spinlock_t process_lock_list;
+	spinlock_t process_io_insert_lock;
 	//struct rw_semaphore  rw_lock;//读写锁使用时可能休眠，不能用在中断上下文
 	struct list_head process_io_control_head;
 	struct list_head process_io_control_head_del;//暂时存放delete的process_io_info
+	struct list_head process_io_insert_head;//插入IO队列的IO请求放到这个队列头，等IO传输完成再剔除掉
 	struct task_struct *kernel_thread;
 	struct kmem_cache *process_rq_stat_cachep;
         struct kmem_cache *process_io_info_cachep;

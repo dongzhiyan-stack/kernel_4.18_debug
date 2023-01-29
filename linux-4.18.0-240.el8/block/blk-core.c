@@ -1340,15 +1340,29 @@ void blk_account_io_done(struct request *req, u64 now)
 		part_dec_in_flight(req->q, part, rq_data_dir(req));
 
 		hd_struct_put(part);
-		part_stat_unlock(); 
+		part_stat_unlock();
+
+	        if(req->q->high_io_prio_enable){
+		   if(req->rq_flags & RQF_HIGH_PRIO){
+		       req->rq_flags &= (~RQF_HIGH_PRIO);
+		   }
+		   if(atomic_read(&(req->q->rq_in_diver_count)) <= 0){
+		       printk("%s req->q->rq_in_diver_count:%d error\n",__func__,atomic_read(&(req->q->rq_in_diver_count)));
+		   }else
+	               atomic_dec(&(req->q->rq_in_diver_count));
+	        }
 	 	/******process_rq_stat***************/
  	        if(req->rq_disk && req->rq_disk->process_io.enable && req->p_process_rq_stat){
 			struct process_rq_stat *p_process_rq_stat_tmp = req->p_process_rq_stat;
 			struct process_io_info *p_process_io_info_tmp = req->p_process_rq_stat->p_process_io_info;
 
+                        spin_lock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
+                        list_del(&req->queuelist_insert);
+                        spin_unlock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
+
 			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
 			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
-			printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d\n",__func__,(u64)req,(u64)(req->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
+			//printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d\n",__func__,(u64)req,(u64)(req->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
 			//p_process_rq_stat_tmp->real_dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_real_issue_time;
 			
 			/*这里把 process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等都放到spin lock锁里。而print_process_io_info()函数中打印这个进程的process_io_info的rq_inflght_issue、rq_inflght_done、complete_rq_count、all_id_time等数据后，对他们清0，也加了同样的spin lock锁。这个加锁的目的是，保证在print_process_io_info()对他们清0时，不影响process_io_info已经保存了部分这些数据最新数据，但是还没被print_process_io_info()打印使用。简单说，spin lock锁保证了print_process_io_info()对rocess_io_info这些成员清0，不影响数据一致性*/

@@ -723,7 +723,7 @@ void blk_mq_start_request(struct request *rq)
 	    }else{
 	        printk(KERN_DEBUG"%s rq:0x%llx repeat dispatch\n",__func__,(u64)rq);
 	    }
-            printk(KERN_DEBUG"%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d  rq_real_issue_time:%lld\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
+            //printk(KERN_DEBUG"%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d  rq_real_issue_time:%lld\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
 
 	    /*p_process_rq_stat_tmp->rq_issue_time = ktime_to_us(ktime_get());
 	    p_process_rq_stat_tmp->id_time = p_process_rq_stat_tmp->rq_issue_time - p_process_rq_stat_tmp->rq_inset_time;*/
@@ -757,6 +757,9 @@ void blk_mq_start_request(struct request *rq)
 		p_process_rq_stat_tmp->rq_inflght_issue_tmp[1] =  atomic_read(&(rq->rq_disk->process_io.rq_in_driver));
 	    }
 	}
+	if(rq->q->high_io_prio_enable){
+	    atomic_inc(&(rq->q->rq_in_diver_count));
+        }
 }
 EXPORT_SYMBOL(blk_mq_start_request);
 
@@ -812,6 +815,17 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 	struct process_io_info *p_process_io_info_tmp_copy = NULL;
 	//struct process_io_info *p_process_io_info_del = NULL;
         int i = 0;
+	struct request *rq;
+
+	list_for_each_entry_rcu(rq, &(p_process_io_tmp->process_io_insert_head),queuelist_insert){
+	    if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat && (rq->p_process_rq_stat->rq_inset_time !=0)){
+	       //一个IO 5s还没有派发，那可能就出问题了
+	       if(ktime_to_us(ktime_get()) - rq->p_process_rq_stat->rq_inset_time > 5000000){
+	           printk("rq:0x%llx long time do not dispatch\n",(u64)rq);
+	       }
+	    }
+	}
+
         //spin_lock_irq(&(p_process_io_tmp->process_lock));
         atomic_inc(&(p_process_io_tmp->read_lock_count));//类似 rcu_read_lock()开始宽限期Grace Period
 	//list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
@@ -1416,6 +1430,36 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			no_budget_avail = true;
 			break;
 		}
+		if(q->high_io_prio_enable){
+		    if((rq->rq_flags & RQF_HIGH_PRIO) && (0 == q->high_io_prio_mode)){
+		        q->high_io_prio_mode = 1;
+		    }
+
+		    if(q->high_io_prio_mode){
+		        if(rq->rq_flags & RQF_HIGH_PRIO){
+		            q->high_io_prio_limit = 0;	
+			}else{
+			    q->high_io_prio_limit ++;
+			    //如果q->high_io_prio_limit过大，说明已经一段时间没有高优先级IO了，则在else分支清理high_io_prio_mode
+                            if(q->high_io_prio_limit < 60){
+				//如果驱动队列的IO数大于16这个阀值，则不再派发非高优先级IO
+		                if(atomic_read(&(rq->q->rq_in_diver_count)) > 16){
+		                    spin_lock(&hctx->lock);
+				    //把非高优先级rq从list链表剔除，并移动到hctx->dispatch延迟派发,这个过程要加锁
+		                    list_move(&rq->queuelist, &hctx->dispatch);
+		                    spin_unlock(&hctx->lock);
+				    continue;
+			         }
+			    }
+			    else
+			    {
+			        //q->high_io_prio_limit = 0;
+				q->high_io_prio_mode = 0;
+			    }
+			}
+
+		    }
+		}
 
 		if (!blk_mq_get_driver_tag(rq)) {
 			/*
@@ -1515,13 +1559,15 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		        if(p_process_rq_stat_tmp->rq_real_issue_time == 0){
 			    //spin_lock_irq(&(p_process_io_info_tmp->io_data_lock)); 
 		            p_process_rq_stat_tmp->rq_real_issue_time = ktime_to_us(ktime_get());
-			    smp_mb();
-		            printk("%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_real_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_real_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
+			    //smp_mb();
+		            //printk("%s %s %d rq:0x%llx process_rq_stat:0x%llx rq_real_issue_time:%lld p_process_io_info_tmp:0x%llx pid:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_real_issue_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
 			    //spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 			}
 		        else
 			{
-		            printk(KERN_ERR"!!!!!!!!!!%s %s %d rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%llu rq_issue_time:%llu rq_inset_time:%llu\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time,p_process_rq_stat_tmp->rq_issue_time,p_process_rq_stat_tmp->rq_inset_time);
+			    //走到这里说明发生了错误，把 rq_real_issue_time 清0，表示本轮采集的rq_real_issue_time无效
+			    p_process_rq_stat_tmp->rq_real_issue_time = 0;
+		            //printk(KERN_ERR"!!!!!!!!!!%s %s %d rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%llu rq_issue_time:%llu rq_inset_time:%llu\n",__func__,current->comm,current->pid,(u64)rq,(u64)(rq->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time,p_process_rq_stat_tmp->rq_issue_time,p_process_rq_stat_tmp->rq_inset_time);
 		//	    dump_stack();
 		        }
 		    }

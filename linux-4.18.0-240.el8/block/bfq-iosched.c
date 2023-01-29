@@ -2232,6 +2232,10 @@ static void bfq_add_request(struct request *rq)
 		    printk("10:%s %d %s %d f (bfqd->low_latency &&\n",__func__,__LINE__,current->comm,current->pid);
 		bfqq->last_wr_start_finish = jiffies;
 	}
+
+	if(bfqq->wr_coeff == bfqd->bfq_wr_coeff){
+	   rq->rq_flags |= RQF_HIGH_PRIO;
+	}
 }
 
 static struct request *bfq_find_rq_fmerge(struct bfq_data *bfqd,

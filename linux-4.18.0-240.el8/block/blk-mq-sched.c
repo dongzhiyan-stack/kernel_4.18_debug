@@ -234,6 +234,48 @@ static void dispatch_list_rq_count(struct list_head *hctx_list_head)
 	    printk("%s count:%d\n",__func__,count);
     }
 }
+static int blk_mq_do_dispatch_sched_detect(struct blk_mq_hw_ctx *hctx,struct list_head *head)
+{
+	struct request_queue *q = hctx->queue;
+	struct elevator_queue *e = q->elevator;
+	int ret = 0;
+
+	do {
+		struct request *rq;
+
+		if (e->type->ops.has_work && !e->type->ops.has_work(hctx))
+			break;
+
+		if (!list_empty_careful(&hctx->dispatch)) {
+			ret = -EAGAIN;
+			break;
+		}
+                /*
+		//这里不为rq get budget，因为后边__blk_mq_sched_dispatch_requests里执行blk_mq_dispatch_rq_list函数，会get budget
+		if (!blk_mq_get_dispatch_budget(hctx))
+			break;
+                */
+		rq = e->type->ops.dispatch_request(hctx);
+		if(rq){
+		    if(rq->rq_flags & RQF_HIGH_PRIO){
+			//高优先级IO添加到队列头，优先派发
+	                list_add(&rq->queuelist, head);
+			q->high_io_prio_mode = 1;
+	            }else{
+	                list_add_tail(&rq->queuelist, head);
+		    }
+		}
+		else{
+		    //blk_mq_put_dispatch_budget(hctx);
+		    //blk_mq_delay_run_hw_queues(q, BLK_MQ_BUDGET_DELAY);
+		    break;
+		}
+	
+	} while (1);
+
+	return ret;
+}
+
 int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -257,7 +299,9 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 		}
 		spin_unlock(&hctx->lock);
 	}
-
+        if(has_sched_dispatch && q->high_io_prio_enable){
+	    blk_mq_do_dispatch_sched_detect(hctx,&rq_list);
+	}
 	/*
 	 * Only ask the scheduler for requests, if we didn't have residual
 	 * requests from the dispatch list. This is to avoid the case where
@@ -506,6 +550,10 @@ void blk_mq_sched_request_inserted(struct request *rq)
 			
 			memset(p_process_io_info_tmp,0,sizeof(struct process_io_info));
 			atomic_set(&(p_process_io_info_tmp->rq_count),0);
+			 //!!!!!!!!!!!!!!!!要把rq_count加1放到list_add_rcu前边，因为把如果不这样，在list_add_rcu把新分配的rocess_io_info添加到链表后，rq_count是0，可能会被print_process_io_info()释放掉
+			 //不如现在print_process_io_info改进成出现5次进程没有派发IO才会释放进程的process_io_info结构，这个担忧不会出现。但是还是要把rq_count加1放list_add_rcu前边
+                        atomic_inc(&(p_process_io_info_tmp->rq_count));
+
 			spin_lock_init(&(p_process_io_info_tmp->io_data_lock));
                         //向process_io_control_head链表插入process_io_info需要加锁,因为同时在print_process_io_info()函数会从 process_io_control_head链表删除process_io_info，同时多个writer，需要加锁
                         spin_lock_irq(&(rq->rq_disk->process_io.process_lock_list));
@@ -517,7 +565,7 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		        spin_unlock_irq(&(rq->rq_disk->process_io.process_lock_list));
                 
 			atomic_inc(&(rq->rq_disk->process_io.rq_in_queue));
-                        atomic_inc(&(p_process_io_info_tmp->rq_count));
+                        //atomic_inc(&(p_process_io_info_tmp->rq_count));
 			/*spin_lock_irq(&(rq->rq_disk->process_io.io_data_lock));
 		        p_process_io_info_tmp->rq_count ++;
 		        rq->rq_disk->process_io.rq_in_queue ++;
@@ -536,8 +584,11 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		smp_mb();
 		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
 		rq->p_process_rq_stat = p_process_rq_stat_tmp;
-		printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx rq_inset_time:%lld  p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%lld\n",__func__,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_inset_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
-
+		//printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx rq_inset_time:%lld  p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%lld\n",__func__,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_inset_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
+                
+                spin_lock_irq(&(rq->rq_disk->process_io.process_io_insert_lock));
+                list_add(&rq->queuelist_insert,&(rq->rq_disk->process_io.process_io_insert_head));
+                spin_unlock_irq(&(rq->rq_disk->process_io.process_io_insert_lock));
 		return;
 	fail:
                 if(p_process_rq_stat_tmp)

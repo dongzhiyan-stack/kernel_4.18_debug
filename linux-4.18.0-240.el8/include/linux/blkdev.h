@@ -109,6 +109,8 @@ typedef __u32 __bitwise req_flags_t;
 #define RQF_MQ_POLL_SLEPT	((__force req_flags_t)(1 << 20))
 /* ->timeout has been called, don't expire again */
 #define RQF_TIMED_OUT		((__force req_flags_t)(1 << 21))
+/*高优先级req*/
+#define RQF_HIGH_PRIO		((__force req_flags_t)(1 << 21))
 
 /* flags that prevent us from merging requests: */
 #define RQF_NOMERGE_FLAGS \
@@ -141,6 +143,7 @@ struct request {
 	
 	/******process_rq_stat***************/
 	struct process_rq_stat *p_process_rq_stat;
+	struct list_head queuelist_insert;
 
 	unsigned int cmd_flags;		/* op and common flags */
 	req_flags_t rq_flags;
@@ -594,6 +597,10 @@ struct request_queue {
 
 #define BLK_MAX_WRITE_HINTS	5
 	u64			write_hints[BLK_MAX_WRITE_HINTS];
+	bool                    high_io_prio_enable;
+	bool                    high_io_prio_mode;
+	int                     high_io_prio_limit;
+        atomic_t                rq_in_diver_count;
 
 	/*
 	 * for reusing dead hctx instance in case of updating
