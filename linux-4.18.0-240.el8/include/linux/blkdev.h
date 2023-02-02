@@ -143,7 +143,6 @@ struct request {
 	
 	/******process_rq_stat***************/
 	struct process_rq_stat *p_process_rq_stat;
-	struct list_head queuelist_insert;
 
 	unsigned int cmd_flags;		/* op and common flags */
 	req_flags_t rq_flags;

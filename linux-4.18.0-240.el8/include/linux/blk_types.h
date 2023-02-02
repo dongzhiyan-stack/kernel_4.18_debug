@@ -144,6 +144,8 @@ struct process_rq_stat{
 	u64 req_size;
 
 	struct process_io_info *p_process_io_info;
+	struct list_head process_io_insert;
+	bool   has_delete;
 };
 
 /**

@@ -587,7 +587,10 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		//printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx rq_inset_time:%lld  p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%lld\n",__func__,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_inset_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
                 
                 spin_lock_irq(&(rq->rq_disk->process_io.process_io_insert_lock));
-                list_add(&rq->queuelist_insert,&(rq->rq_disk->process_io.process_io_insert_head));
+		//为什么不直接把rq添加到process_io_insert_head链表，而是把rq->p_process_rq_stat添加到process_io_insert_head链表。这是因为可能在IO传输完成执行blk_account_io_done()后
+		//可能会释放掉rq。然后print_process_io_info()中从process_io_insert_head遍历到这个被释放的rq，使用rq->p_process_rq_stat->rq_inset_time就有问题了，因为rq已经失效了
+                list_add(&rq->p_process_rq_stat->process_io_insert,&(rq->rq_disk->process_io.process_io_insert_head));
+                //list_add(&rq->queuelist_insert,&(rq->rq_disk->process_io.process_io_insert_head));
                 spin_unlock_irq(&(rq->rq_disk->process_io.process_io_insert_lock));
 		return;
 	fail:

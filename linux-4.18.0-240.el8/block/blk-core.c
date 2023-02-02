@@ -1342,10 +1342,10 @@ void blk_account_io_done(struct request *req, u64 now)
 		hd_struct_put(part);
 		part_stat_unlock();
 
+		if(req->rq_flags & RQF_HIGH_PRIO){
+		    req->rq_flags &= (~RQF_HIGH_PRIO);
+		}
 	        if(req->q->high_io_prio_enable){
-		   if(req->rq_flags & RQF_HIGH_PRIO){
-		       req->rq_flags &= (~RQF_HIGH_PRIO);
-		   }
 		   if(atomic_read(&(req->q->rq_in_diver_count)) <= 0){
 		       printk("%s req->q->rq_in_diver_count:%d error\n",__func__,atomic_read(&(req->q->rq_in_diver_count)));
 		   }else
@@ -1356,10 +1356,7 @@ void blk_account_io_done(struct request *req, u64 now)
 			struct process_rq_stat *p_process_rq_stat_tmp = req->p_process_rq_stat;
 			struct process_io_info *p_process_io_info_tmp = req->p_process_rq_stat->p_process_io_info;
 
-                        spin_lock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
-                        list_del(&req->queuelist_insert);
-                        spin_unlock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
-
+                        
 			p_process_rq_stat_tmp->dc_time = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_issue_time;
 			p_process_rq_stat_tmp->idc_time = p_process_rq_stat_tmp->dc_time + p_process_rq_stat_tmp->id_time;
 			//printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx p_process_io_info_tmp:0x%llx pid:%d\n",__func__,(u64)req,(u64)(req->p_process_rq_stat),(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid);
@@ -1436,14 +1433,22 @@ void blk_account_io_done(struct request *req, u64 now)
 			if(atomic_read(&(p_process_io_info_tmp->rq_count)) < 0 || atomic_read(&(req->rq_disk->process_io.rq_in_driver)) < 0){
 				printk(KERN_DEBUG"%s rq_count:%d rq_in_driver:%d !!!!!!\n",__func__,atomic_read(&(p_process_io_info_tmp->rq_count)),atomic_read(&(req->rq_disk->process_io.rq_in_driver)));
 			}
-			
+			//spin_lock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
+			//list_del(&p_process_rq_stat_tmp->process_io_insert);
+			p_process_rq_stat_tmp->has_delete = 1;
+                        //list_del(&req->queuelist_insert);
+                        //spin_unlock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
+
 		        //smp_mb();	
-			kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
-		        //req->p_process_rq_stat = NULL;
+			//这里先不释放process_rq_stat，因为print_process_io_info()中可能正在process_io_insert_head链表遍历这个process_rq_stat，因此在print_process_io_info()释放个process_rq_stat结构
+			//kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep, p_process_rq_stat_tmp);
+		        req->p_process_rq_stat = NULL;
 	        }//req->rq_disk->process_io.enable 是0，但是req->p_process_rq_stat非NULL，说明之前使能了process_io，现在禁止了，那需要在这里释放rocess_rq_stat，否则内存泄漏
 		else if(req->rq_disk && req->p_process_rq_stat && (req->rq_disk->process_io.enable == 0))
 		{
-		    kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
+	            struct process_rq_stat *p_process_rq_stat_tmp = req->p_process_rq_stat;
+	            p_process_rq_stat_tmp->has_delete = 1;
+		    //kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
 		    req->p_process_rq_stat = NULL;	
 		}
 	}

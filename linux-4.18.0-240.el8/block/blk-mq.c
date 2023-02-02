@@ -815,13 +815,24 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 	struct process_io_info *p_process_io_info_tmp_copy = NULL;
 	//struct process_io_info *p_process_io_info_del = NULL;
         int i = 0;
-	struct request *rq;
+	struct process_rq_stat *p_process_rq_stat_tmp,*p_process_rq_stat_n;
 
-	list_for_each_entry_rcu(rq, &(p_process_io_tmp->process_io_insert_head),queuelist_insert){
-	    if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat && (rq->p_process_rq_stat->rq_inset_time !=0)){
-	       //一个IO 5s还没有派发，那可能就出问题了
-	       if(ktime_to_us(ktime_get()) - rq->p_process_rq_stat->rq_inset_time > 5000000){
-	           printk("rq:0x%llx long time do not dispatch\n",(u64)rq);
+	list_for_each_entry_safe(p_process_rq_stat_tmp,p_process_rq_stat_n, &(p_process_io_tmp->process_io_insert_head),process_io_insert){
+	    smp_rmb();
+	    //printk("print_process_io_info p_process_io_tmp:0x%llx p_process_rq_stat_tmp:0x%llx\n",(u64)p_process_io_tmp,(u64)p_process_rq_stat_tmp);
+	    if(p_process_rq_stat_tmp->has_delete){
+		//不能通过req得到process_io_insert_lock锁，因为req此时可能已经释放了，是个无效指针
+                //spin_lock_irq(&(p_process_rq_stat_tmp->rq->rq_disk->process_io.process_io_insert_lock));
+                spin_lock_irq(&(p_process_io_tmp->process_io_insert_lock));
+		list_del(&p_process_rq_stat_tmp->process_io_insert);
+                //list_del(&req->queuelist_insert);
+                //spin_unlock_irq(&(p_process_rq_stat_tmp->rq->rq_disk->process_io.process_io_insert_lock));
+                spin_unlock_irq(&(p_process_io_tmp->process_io_insert_lock));
+	        kmem_cache_free(p_process_io_tmp->process_rq_stat_cachep, p_process_rq_stat_tmp);
+	    }else if(p_process_rq_stat_tmp->rq_inset_time !=0){
+	       //一个IO 30s还没有派发，那可能就出问题了
+	       if(ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_inset_time > 30000000){
+	           printk("rq:0x%llx long time do not dispatch\n",(u64)(p_process_rq_stat_tmp->rq));
 	       }
 	    }
 	}

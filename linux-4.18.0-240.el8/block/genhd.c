@@ -1260,7 +1260,8 @@ static int process_rq_stat_thread(void *arg)
 
 	if(p_process_io_tmp && p_process_io_tmp->enable)
             print_process_io_info(p_process_io_tmp);
-
+        
+	smp_rmb();
         if(p_process_io_tmp->enable == 0){ 
 	    msleep(3000);//等待之前的IO传输完成，其实更好是遍历 p_process_io_tmp->process_io_control_head 链表，等每个进程的挂起的IO请求减少为0
             free_all_process_io_info(p_process_io_tmp);//free_all_process_io_info得保证每个 process_io_info的rq_count是0才能释放process_io_info结构
@@ -1317,12 +1318,16 @@ static ssize_t disk_process_rq_stat_store(struct device *dev,
 
 	            disk->process_io.kernel_thread = kthread_create(process_rq_stat_thread,(void *)&disk->process_io,"process_rq_stat");
 	            if (IS_ERR(disk->process_io.kernel_thread )) {
-				printk("%s kthread_create fail\n",__func__);
-			}else{
-			    wake_up_process(disk->process_io.kernel_thread);
-		        }
+			printk("%s kthread_create fail\n",__func__);
+			return -EINVAL;
+		    }else{
+			//把process_rq_stat线程唤醒要放到 disk->process_io.enable=1后，因为可能出现这里wake后线程立即运行，而disk->process_io.enable还是0，这样线程函数process_rq_stat_thread会因为
+			//disk->process_io.enable还是0而执行free_all_process_io_info()
+		        //wake_up_process(disk->process_io.kernel_thread);
+		    }
 		}
 		disk->process_io.enable = intv;
+	        wake_up_process(disk->process_io.kernel_thread);
        }
        return count;
 }
@@ -1352,7 +1357,7 @@ static ssize_t disk_process_high_io_prio_store(struct device *dev,
 	   if(intv){
 	       disk->queue->high_io_prio_mode = 0;
 	       disk->queue->high_io_prio_limit = 0;
-	       atomic_set(&(disk->queue->process_io.rq_in_queue),0);
+	       atomic_set(&(disk->queue->rq_in_diver_count),0);
 	   }
        }
        return count;

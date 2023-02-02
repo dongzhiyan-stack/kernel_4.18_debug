@@ -678,7 +678,7 @@ static void blk_account_io_merge(struct request *req)
                 //req 合并到其他req了，这里释放它，并rq_in_queue减1
 		if(req->rq_disk && req->rq_disk->process_io.enable && req->p_process_rq_stat){
 		    spin_lock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
-                    list_del(&req->queuelist_insert);
+                    list_del(&req->p_process_rq_stat->process_io_insert);
 		    spin_unlock_irq(&(req->rq_disk->process_io.process_io_insert_lock));
 
 		    kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
