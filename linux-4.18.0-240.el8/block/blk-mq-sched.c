@@ -230,8 +230,8 @@ static void dispatch_list_rq_count(struct list_head *hctx_list_head)
 	    p_process_io_info_tmp->max_hctx_list_rq_count = count;
 	}
 	spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
-	if(count > 0)
-	    printk("%s count:%d\n",__func__,count);
+	//if(count > 0)
+	//    printk("%s count:%d\n",__func__,count);
     }
 }
 static int blk_mq_do_dispatch_sched_detect(struct blk_mq_hw_ctx *hctx,struct list_head *head)
@@ -271,7 +271,7 @@ static int blk_mq_do_dispatch_sched_detect(struct blk_mq_hw_ctx *hctx,struct lis
 		    break;
 		}
 	
-	} while (1);
+	} while (0);//不再是while(1),一次只探测一个IO请求
 
 	return ret;
 }
@@ -583,7 +583,9 @@ void blk_mq_sched_request_inserted(struct request *rq)
 		p_process_rq_stat_tmp->p_process_io_info = p_process_io_info_tmp;
 		smp_mb();
 		p_process_rq_stat_tmp->rq_inset_time = ktime_to_us(ktime_get());
+		p_process_rq_stat_tmp->rq = rq;
 		rq->p_process_rq_stat = p_process_rq_stat_tmp;
+
 		//printk(KERN_DEBUG"%s rq:0x%llx process_rq_stat:0x%llx rq_inset_time:%lld  p_process_io_info_tmp:0x%llx pid:%d rq_real_issue_time:%lld\n",__func__,(u64)rq,(u64)(rq->p_process_rq_stat),p_process_rq_stat_tmp->rq_inset_time,(u64)p_process_io_info_tmp,p_process_io_info_tmp->pid,p_process_rq_stat_tmp->rq_real_issue_time);
                 
                 spin_lock_irq(&(rq->rq_disk->process_io.process_io_insert_lock));

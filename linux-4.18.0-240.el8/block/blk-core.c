@@ -1366,8 +1366,9 @@ void blk_account_io_done(struct request *req, u64 now)
 			//spin_lock_irq(&(req->rq_disk->process_io.process_lock));
 			//spin_lock_irq(&(req->rq_disk->process_io.io_data_lock));//???????????????????这里的spin lock不要弄成基于process_io_control的全局锁，而是做成基于进程自己process_io_info的锁。这样可以避免多个进程IO请求传输完成在这里都要抢占 req->rq_disk->process_io.io_data_lock 锁
 		
-			
-			spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
+			//blk_account_io_done在中断里调用，spin_lock_irq会关闭中断，导致nvme驱动中断异常告警，因此改成spin_lock.这样应该不会导致死锁吧 
+			//spin_lock_irq(&(p_process_io_info_tmp->io_data_lock));
+			spin_lock(&(p_process_io_info_tmp->io_data_lock));
 		        req->p_process_rq_stat = NULL;
 			
 			//如果rq派发的非常快，可能先执行这里而还没执行到blk_mq_dispatch_rq_list()里对rq_real_issue_time的赋值，rq_real_issue_time是0。这种情况就默认real_dc_time是0
@@ -1423,7 +1424,8 @@ void blk_account_io_done(struct request *req, u64 now)
 			p_process_io_info_tmp->io_size += p_process_rq_stat_tmp->req_size;
 			//spin_unlock_irq(&(req->rq_disk->process_io.process_lock));
 			//spin_unlock_irq(&(req->rq_disk->process_io.io_data_lock));
-			spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
+			//spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
+			spin_unlock(&(p_process_io_info_tmp->io_data_lock));
                         
 			//进程在传输的IO请求数减1
 			atomic_dec(&(p_process_io_info_tmp->rq_count));

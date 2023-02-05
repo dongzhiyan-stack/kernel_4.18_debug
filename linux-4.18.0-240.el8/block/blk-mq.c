@@ -1420,6 +1420,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
         int rq_pid = -1;
 	struct process_rq_stat *p_process_rq_stat_tmp = NULL;
         struct process_io_info *p_process_io_info_tmp = NULL;
+	LIST_HEAD(tmp_list);
 
 	if (list_empty(list))
 		return false;
@@ -1454,12 +1455,21 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			    //如果q->high_io_prio_limit过大，说明已经一段时间没有高优先级IO了，则在else分支清理high_io_prio_mode
                             if(q->high_io_prio_limit < 60){
 				//如果驱动队列的IO数大于16这个阀值，则不再派发非高优先级IO
-		                if(atomic_read(&(rq->q->rq_in_diver_count)) > 16){
-		                    spin_lock(&hctx->lock);
+		                if(atomic_read(&(rq->q->rq_in_diver_count)) > 19){
+		                    //spin_lock(&hctx->lock);
 				    //把非高优先级rq从list链表剔除，并移动到hctx->dispatch延迟派发,这个过程要加锁
-		                    list_move(&rq->queuelist, &hctx->dispatch);
-		                    spin_unlock(&hctx->lock);
-				    continue;
+		                    //list_move(&rq->queuelist, &hctx->dispatch);
+		                    //spin_unlock(&hctx->lock);
+		                    list_move(&rq->queuelist, &tmp_list);
+				    printk("%s %s %d do not dispatch rq:%llx for high prio io list:%d tmp_list:%d\n",__func__,current->comm,current->pid,(u64)rq,list_empty(list),list_empty(&tmp_list));
+				    //如果此req是最后一个IO请求，则不再根据优先级派发IO，这是遵循mq派发驱动的规则，最后一个必须bd.last = true传递给磁盘驱
+				    if(list_empty(list)){
+		                        list_move(&rq->queuelist, list);
+				    }
+				    else{
+	                                blk_mq_put_driver_tag(rq);
+				        continue;
+				    }
 			         }
 			    }
 			    else
@@ -1589,6 +1599,14 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 
 	hctx->dispatched[queued_to_index(queued)]++;
 
+	if (!list_empty(&tmp_list)){
+	    printk("%s %s %d move tmp_list to hctx->dispatch ret:%d queued:%d errors:%d\n",__func__,current->comm,current->pid,ret,queued,errors);
+	    spin_lock(&hctx->lock);
+	    //把非高优先级rq从list链表剔除，并移动到hctx->dispatch延迟派发,这个过程要加锁
+	    list_splice_init(&tmp_list, &hctx->dispatch);
+	    spin_unlock(&hctx->lock);
+	}
+
 	/*
 	 * Any items that need requeuing? Stuff them into hctx->dispatch,
 	 * that is where we will continue on next queue run.
@@ -1654,7 +1672,10 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		return false;
 	} else
 		blk_mq_update_dispatch_busy(hctx, false);
-
+        
+	if(queued != 1){
+	    printk("%s %s %d ret:%d queued:%d errors:%d\n",__func__,current->comm,current->pid,ret,queued,errors);
+	}
 	/*
 	 * If the host/device is unable to accept more work, inform the
 	 * caller of that.
