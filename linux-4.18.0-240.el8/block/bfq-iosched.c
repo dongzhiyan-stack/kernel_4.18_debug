@@ -143,7 +143,7 @@
 
 extern int open_bfqq_printk;
 extern int open_bfqq_printk1;
-
+#define HIGH_PRIO_IO_LIMIT 16
 
 #define BFQ_BFQQ_FNS(name)						\
 void bfq_mark_bfqq_##name(struct bfq_queue *bfqq)			\
@@ -4943,6 +4943,7 @@ static bool bfq_has_work(struct blk_mq_hw_ctx *hctx)
 	 * most a call to dispatch for nothing
 	 */
 	return !list_empty_careful(&bfqd->dispatch) ||
+               !list_empty(&bfqd->bfq_high_prio_tmp_list) ||
 		bfq_tot_busy_queues(bfqd) > 0;
 }
 
@@ -4951,6 +4952,7 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	struct bfq_data *bfqd = hctx->queue->elevator->elevator_data;
 	struct request *rq = NULL;
 	struct bfq_queue *bfqq = NULL;
+	int direct_dispatch = 0;
 
 	if(open_bfqq_printk)
 	    printk("1:%s %d %s %d list_empty(&bfqd->dispatch):%d\n",__func__,__LINE__,current->comm,current->pid,list_empty(&bfqd->dispatch));
@@ -4964,6 +4966,7 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 		if(open_bfqq_printk)
 	            printk("2:if (!list_empty(&bfqd->dispatch)) %s %d %s %d bfqq:%llx req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq);
 
+                direct_dispatch = 1;
 		if (bfqq) {
 			/*
 			 * Increment counters here, because this
@@ -5001,6 +5004,18 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 		 */
 		goto start_rq;
 	}
+	/*********high prio io *****************************************/
+	/*if(queue->high_io_prio_enable && !list_empty(&bfqd->bfq_high_prio_tmp_list)){
+	     //不能在这里派发bfq_high_prio_tmp_list链表暂存的非high prio io的io，因为要保证下边优先派发high prio io
+             rq = list_first_entry(&bfqd->bfq_high_prio_tmp_list, struct request, queuelist); 
+	     list_del_init(&rq->queuelist);
+
+	     bfqq = RQ_BFQQ(rq);
+	     if (bfqq) {
+		 bfqq->dispatched++;
+	     }
+	     goto inc_in_driver_start_rq;
+	}*/
 
 	bfq_log(bfqd, "dispatch requests: %d busy queues",
 		bfq_tot_busy_queues(bfqd));
@@ -5038,14 +5053,78 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 
 	rq = bfq_dispatch_rq_from_bfqq(bfqd, bfqq);
 
-
 	if (rq) {
+		if(bfqd->queue->high_io_prio_enable)
+		{
+			/***************high prio io*************************************/
+			if(rq->rq_flags & RQF_HIGH_PRIO){//高优先级IO
+	                    printk("1:%s %s %d rq:0x%llx bfqd:0x%llx bfqq->dispatched:%d bfq_high_io_prio_mode:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqd,bfqq->dispatched,bfqd->bfq_high_io_prio_mode);
+			    //第一次遇到high prio io，置1 bfq_high_io_prio_mode，启动5s定时器，定时到了对bfq_high_io_prio_mode清0
+			    if(bfqd->bfq_high_io_prio_mode == 0){
+				bfqd->bfq_high_io_prio_mode = 1;
+				hrtimer_start(&bfqd->bfq_high_prio_timer, ms_to_ktime(5000),HRTIMER_MODE_REL);
+			    }
+			}
+			else////非高优先级IO
+			{
+			   if(bfqd->bfq_high_io_prio_mode)
+			   {
+			       //在 bfq_high_io_prio_mode 非0时间的5s内，如果遇到非high prio io，并且驱动队列IO个数大于限制，则把不派发该IO，而是临时添加到bfq_high_prio_tmp_list链表
+			       if(bfqd->rq_in_driver >= HIGH_PRIO_IO_LIMIT){
+			            //把rq从原有链表删掉并把rq移动到bfq_high_prio_tmp_list链表尾，派发时是从bfq_high_prio_tmp_list链表头取出rq，保证先到先派发
+				    //list_move_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
+				    list_add_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
+				    ///bfq_dispatch_rq_from_bfqq->bfq_dispatch_remove选中派发的rq后已经bfqq->dispatched++，这里不立即派发，先减1，等真正派发时再加1
+				    bfqq->dispatched --;
+				    bfqd->bfq_high_io_prio_count ++;
+				    printk("2:%s %s %d add rq:0x%llx bfqq:0x%llx bfqq->dispatched:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->dispatched);
+				    return NULL;
+			       }
+			   }
+                           //如果 bfq_high_prio_tmp_list上有rq，则goto exit分支，把rq添加到bfq_high_prio_tmp_list链表尾巴，而取出bfq_high_prio_tmp_list链表头的rq派发
+	                   //if(!list_empty(&bfqd->bfq_high_prio_tmp_list)){-------链表空判断移动到下边了，这里注释掉
+                           //    goto exit;
+                           //}
+		        }
+	       }
+	   //如果 bfq_high_prio_tmp_list 链表上有rq要派发，不执行这里的rq_in_driver++，在下边的exit那里会执行，当echo 0 >/sys/block/sdb/process_high_io_prio 置1再置0后，这个if判断就起作用了
+	   //没这个判断，这里会bfqd->rq_in_driver++，下边的if里再bfqd->rq_in_driver++，导致rq_in_driver泄漏
+           if((rq->rq_flags & RQF_HIGH_PRIO) || list_empty(&bfqd->bfq_high_prio_tmp_list)){
 inc_in_driver_start_rq:
 		bfqd->rq_in_driver++;
 start_rq:
 		rq->rq_flags |= RQF_STARTED;
+	    }
 	}
+
 exit:
+ 	//1:如果是高优先级IO该if不成立，直接跳过。 2:如果非高优先级IO，则把rq添加到bfq_high_prio_tmp_list尾，从链表头选一个rq派发 3:如果rq是NULL，则也从bfq_high_prio_tmp_list选一个rq派发
+        if(!direct_dispatch && ((rq && !(rq->rq_flags & RQF_HIGH_PRIO)) || !rq)){
+	   //如果bfq_high_prio_tmp_list有Io, 则不派发本次的io而添加到bfq_high_prio_tmp_list尾部，实际从bfq_high_prio_tmp_list链表头取出一个IO派发
+	   //放到 if(bfqd->queue->high_io_prio_enable)外边是为了保证一旦设置high_io_prio_enable为0，还能派发残留的在bfq_high_prio_tmp_list上的IO
+	   if(!list_empty(&bfqd->bfq_high_prio_tmp_list)){
+		 if(rq){
+		     printk("3:%s %s %d add rq:0x%llx bfqq:0x%llx bfqq->dispatched:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->dispatched);
+		     list_add_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
+		     bfqq->dispatched --;
+		     bfqd->bfq_high_io_prio_count ++;
+		 }
+
+		 rq = list_first_entry(&bfqd->bfq_high_prio_tmp_list, struct request, queuelist); 
+		 list_del_init(&rq->queuelist);
+
+		 bfqd->bfq_high_io_prio_count --;
+		 bfqq = RQ_BFQQ(rq);
+		 if(bfqq)
+		     bfqq->dispatched++;
+
+		 bfqd->rq_in_driver++;
+		 rq->rq_flags |= RQF_STARTED;
+		 printk("4:%s %s %d  dispatch rq:0x%llx\n",__func__,current->comm,current->pid,(u64)rq);
+	    }
+        }
+
+        printk("5:%s %s %d  dispatch rq:0x%llx bfq_high_io_prio_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,bfqd->bfq_high_io_prio_count,bfqd->rq_in_driver);
 	if(open_bfqq_printk1 && bfqq)
 	    printk("5:%s %d %s %d dispatch bfqq:%llx belong to pid:%d req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,(u64)rq);
 	return rq;
@@ -6714,6 +6793,15 @@ static enum hrtimer_restart bfq_idle_slice_timer(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
+/*******high prio io*******************/
+static enum hrtimer_restart bfq_high_prio_timer_function(struct hrtimer *timer)
+{
+    struct bfq_data *bfqd = container_of(timer, struct bfq_data,bfq_high_prio_timer);
+    
+    printk("%s bfqd:0x%llx bfq_high_io_prio_mode zero\n",__func__,(u64)bfqd);
+    bfqd->bfq_high_io_prio_mode = 0;
+    return HRTIMER_NORESTART;
+}
 static void __bfq_put_async_bfqq(struct bfq_data *bfqd,
 				 struct bfq_queue **bfqq_ptr)
 {
@@ -6823,6 +6911,8 @@ static void bfq_exit_queue(struct elevator_queue *e)
 	spin_unlock_irq(&bfqd->lock);
 
 	hrtimer_cancel(&bfqd->idle_slice_timer);
+	/********high prio io****************************/
+	hrtimer_cancel(&bfqd->bfq_high_prio_timer);
 
 	/* release oom-queue reference to root group */
 	bfqg_and_blkg_put(bfqd->root_group);
@@ -6956,6 +7046,13 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	bfqd->peak_rate = ref_rate[blk_queue_nonrot(bfqd->queue)] * 2 / 3;
 
 	spin_lock_init(&bfqd->lock);
+
+	/*****************high prio io****************************/
+        INIT_LIST_HEAD(&bfqd->bfq_high_prio_tmp_list);
+	bfqd->bfq_high_io_prio_mode = 0;
+	bfqd->bfq_high_io_prio_count = 0;
+	hrtimer_init(&bfqd->bfq_high_prio_timer, CLOCK_MONOTONIC,HRTIMER_MODE_REL);
+	bfqd->bfq_high_prio_timer.function = bfq_high_prio_timer_function;
 
 	/*
 	 * The invocation of the next bfq_create_group_hierarchy

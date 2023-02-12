@@ -299,7 +299,7 @@ int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 		}
 		spin_unlock(&hctx->lock);
 	}
-        if(has_sched_dispatch && q->high_io_prio_enable){
+        if(has_sched_dispatch && 0 /* q->high_io_prio_enable*/){
 	    blk_mq_do_dispatch_sched_detect(hctx,&rq_list);
 	}
 	/*

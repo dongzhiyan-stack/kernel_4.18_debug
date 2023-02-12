@@ -1442,7 +1442,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 			no_budget_avail = true;
 			break;
 		}
-		if(q->high_io_prio_enable){
+		if(0 /*q->high_io_prio_enable*/){
 		    if((rq->rq_flags & RQF_HIGH_PRIO) && (0 == q->high_io_prio_mode)){
 		        q->high_io_prio_mode = 1;
 		    }
@@ -1599,7 +1599,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 
 	hctx->dispatched[queued_to_index(queued)]++;
 
-	if (!list_empty(&tmp_list)){
+	if (0 /*!list_empty(&tmp_list)*/){
 	    printk("%s %s %d move tmp_list to hctx->dispatch ret:%d queued:%d errors:%d\n",__func__,current->comm,current->pid,ret,queued,errors);
 	    spin_lock(&hctx->lock);
 	    //把非高优先级rq从list链表剔除，并移动到hctx->dispatch延迟派发,这个过程要加锁
@@ -1673,8 +1673,9 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 	} else
 		blk_mq_update_dispatch_busy(hctx, false);
         
-	if(queued != 1){
+	if(queued > 1){
 	    printk("%s %s %d ret:%d queued:%d errors:%d\n",__func__,current->comm,current->pid,ret,queued,errors);
+	    dump_stack();
 	}
 	/*
 	 * If the host/device is unable to accept more work, inform the

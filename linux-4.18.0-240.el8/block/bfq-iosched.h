@@ -749,6 +749,13 @@ struct bfq_data {
 	 * function)
 	 */
 	unsigned int word_depths[2][2];
+
+	/********high prio io******************************/
+	struct list_head bfq_high_prio_tmp_list;
+	int bfq_high_io_prio_mode;
+	struct hrtimer bfq_high_prio_timer;
+        int bfq_high_io_prio_limit;
+	int bfq_high_io_prio_count;
 };
 
 enum bfqq_state_flags {
