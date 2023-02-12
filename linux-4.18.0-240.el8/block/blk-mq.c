@@ -809,6 +809,13 @@ void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
 	printk("free_all_process_io_info ok\n");
 }
 EXPORT_SYMBOL(free_all_process_io_info);
+
+int max_bfq_dispatched;
+int max_bfq_high_io_prio_count;
+int max_bfq_rq_in_driver;
+EXPORT_SYMBOL(max_bfq_dispatched);
+EXPORT_SYMBOL(max_bfq_high_io_prio_count);
+EXPORT_SYMBOL(max_bfq_rq_in_driver);
 void print_process_io_info(struct process_io_control *p_process_io_tmp)
 {
 	struct process_io_info *p_process_io_info_tmp = NULL;
@@ -885,8 +892,11 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    //spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
 		    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 	            
-		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus max_real_dc_time:%dus max_hctx_list_rq:%d rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,max_real_dc_time,max_hctx_list_rq_count,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time);
-		
+		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus max_real_dc_time:%dus max_hctx_list_rq:%d rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus max_bfq_dispatched:%d max_bfq_high_io_prio_count:%d max_bfq_rq_in_driver:%d\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,max_real_dc_time,max_hctx_list_rq_count,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,max_bfq_dispatched,max_bfq_high_io_prio_count,max_bfq_rq_in_driver);
+	            max_bfq_dispatched = 0;
+                    max_bfq_high_io_prio_count = 0;
+		    max_bfq_rq_in_driver = 0;
+
 		    if(p_process_io_info_tmp->rq_empty_count != 0)
 		    {
 		        p_process_io_info_tmp->rq_empty_count = 0;//来了IO请求则对rq_empty_count清0
