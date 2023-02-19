@@ -1139,6 +1139,17 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 	struct bfq_sched_data *sd = entity->sched_data;
 	struct bfq_service_tree *st = bfq_entity_service_tree(entity);
 
+	/**************************************************************************/
+	//如果bfqq->wr_coeff是30说明是交互式io，执行到这里说明派发这个进程派发的IO太多了，配合消耗完了还没派发完io。此时说明该进程的bfqq需要提升权重，提高游戏那几，作为high prio io.
+	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
+	if(bfqq && bfqq->wr_coeff == 30){
+	    bfqq->wr_coeff = 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR; 
+	    //置1表示权重变了，然后才会在bfq_update_fin_time_enqueue->__bfq_entity_update_weight_prio 里真正提升权重
+	    entity->prio_changed = 1;
+	    //增大权重提升时间为1.5s
+	    bfqq->wr_cur_max_time = msecs_to_jiffies(1500);
+	    printk("%s %s %d bfqq:%llx bfqq->pid:%d is high prio io\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	}
 	if (entity == sd->in_service_entity) {
 		if(open_bfqq_printk)
 		    printk("1:%s %d %s %d entity:%llx entity->tree:%llx if (entity == sd->in_service_entity)\n",__func__,__LINE__,current->comm,current->pid,(u64)entity,(u64)(entity->tree));

@@ -1143,6 +1143,8 @@ static void bfq_add_to_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 				     burst_list_node)
 			bfq_mark_bfqq_in_large_burst(bfqq_item);
 		bfq_mark_bfqq_in_large_burst(bfqq);
+                if(open_bfqq_printk1)
+	            printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 
 		/*
 		 * From now on, and until the current burst finishes, any
@@ -1274,8 +1276,6 @@ static void bfq_add_to_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
  */
 static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
-        if(open_bfqq_printk)
-	    printk("1:%s %d %s %d bfqq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 	/*
 	 * If bfqq is already in the burst list or is part of a large
 	 * burst, or finally has just been split, then there is
@@ -1319,6 +1319,8 @@ static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	 */
 	if (bfqd->large_burst) {
 		bfq_mark_bfqq_in_large_burst(bfqq);
+                if(open_bfqq_printk1)
+	            printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 		goto end;
 	}
 
@@ -1724,9 +1726,11 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 			bfqq->ttime.last_end_request +
 			bfqd->bfq_slice_idle * 3;
 
-	if(strcmp(current->comm,"cat") == 0){
+	if((bfqq->wr_coeff == 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR) && (idle_for_long_time == 0)){
+	    printk("%s %d %s %d bfqq:%llx bfqq->pid:%d force idle_for_long_time = 1\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 	    idle_for_long_time = 1;
 	}
+
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx rq:%llx bfq_bfqq_IO_bound:%d bfq_bfqq_in_large_burst:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq,bfq_bfqq_IO_bound(bfqq),bfq_bfqq_in_large_burst(bfqq));
 	/*
@@ -1745,8 +1749,14 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 
 	*interactive = !in_burst && idle_for_long_time;
 
+        /****************如果同一个线程组的进程近期有in_large_burst属性，禁止它新创建的线程被判定为交互式io***********************************************/
+	if((bfqd->large_burst_process_count > 1) &&(bfqd->large_burst_process_tgid == current->tgid) && strncmp(bfqd->large_burst_process_name,current->comm,COMM_LEN-1) == 0){
+	    *interactive = 0;
+            printk("%s %s %d  prevent in_large_burst bfqq:%llx to interactive io\n",__func__,current->comm,current->pid,(u64)bfqq);
+	}
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx bfqq->wr_coeff:%d bfq_bfqq_sync(bfqq):%d bfqq->bic:%llx *interactive:%d soft_rt:%d in_burst:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->wr_coeff,bfq_bfqq_sync(bfqq),(u64)bfqq->bic,*interactive,soft_rt,in_burst);
+
 	wr_or_deserves_wr = bfqd->low_latency &&
 		(bfqq->wr_coeff > 1 ||
 		 (bfq_bfqq_sync(bfqq) &&
@@ -2237,7 +2247,21 @@ static void bfq_add_request(struct request *rq)
 		bfqq->last_wr_start_finish = jiffies;
 	}
 
-	if(bfqq->wr_coeff == bfqd->bfq_wr_coeff){
+        /****************如果同一个线程组的进程近期有in_large_burst属性，禁止它新创建的线程被判定为交互式io***********************************************/
+	//但是需要一个定时器，没10s重置一次 bfqd->large_burst_process_tgid ，或者在IO空闲10s后重置一次bfqd->large_burst_process_tgid !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	if(bfq_bfqq_in_large_burst(bfqq)){
+            if(current->mm){//只对应用进程有效
+                if(current->tgid != bfqd->large_burst_process_tgid){
+	            bfqd->large_burst_process_tgid = current->tgid;
+	            strncpy(bfqd->large_burst_process_name,current->comm,COMM_LEN-1);
+		    printk("%s %s %d bfqq:%llx in_large_burst count\n",__func__,current->comm,current->pid,(u64)bfqq);
+		    bfqd->large_burst_process_count = 0;
+                }else{
+		    bfqd->large_burst_process_count ++;
+		}
+	    }
+	}
+	if(bfqq->wr_coeff == 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR){
 	   rq->rq_flags |= RQF_HIGH_PRIO;
 	}
 	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
@@ -3671,7 +3695,10 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	 */
 	if (RB_EMPTY_ROOT(&bfqq->sort_list) &&
 	    !(reason == BFQQE_PREEMPTED &&
-	      idling_needed_for_service_guarantees(bfqd, bfqq))) {
+	      idling_needed_for_service_guarantees(bfqd, bfqq)) &&
+	      //high prio io类进程的bfqq，即便没有rq过过期失效，也不能添加到st->idle tree，只能添加到st->active tree。主要防止出现长时间调度延迟
+	      bfqq->wr_coeff != 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR)
+	 {
 		if (bfqq->dispatched == 0)
 			/*
 			 * Overloading budget_timeout field to store
@@ -6574,7 +6601,7 @@ static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
 	if (split && is_sync) {
 		if ((bic->was_in_burst_list && bfqd->large_burst) ||
 		    bic->saved_in_large_burst){
-	                if(open_bfqq_printk)
+	                if(open_bfqq_printk1)
                            printk("3:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 			bfq_mark_bfqq_in_large_burst(bfqq);
 		}
@@ -7118,7 +7145,7 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	bfqd->bfq_high_io_prio_limit = 66;
 	hrtimer_init(&bfqd->bfq_high_prio_timer, CLOCK_MONOTONIC,HRTIMER_MODE_REL);
 	bfqd->bfq_high_prio_timer.function = bfq_high_prio_timer_function;
-
+        bfqd->large_burst_process_count = 0;
 	/*
 	 * The invocation of the next bfq_create_group_hierarchy
 	 * function is the head of a chain of function calls

@@ -40,6 +40,7 @@
  * privilege them against the latter.
  */
 #define BFQ_SOFTRT_WEIGHT_FACTOR	100
+#define BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR	50
 
 struct bfq_entity;
 
@@ -756,6 +757,10 @@ struct bfq_data {
 	struct hrtimer bfq_high_prio_timer;
         int bfq_high_io_prio_limit;
 	int bfq_high_prio_tmp_list_rq_count;
+	int large_burst_process_tgid;
+        #define  COMM_LEN	16
+        char large_burst_process_name[COMM_LEN];
+	int large_burst_process_count;
 };
 
 enum bfqq_state_flags {
