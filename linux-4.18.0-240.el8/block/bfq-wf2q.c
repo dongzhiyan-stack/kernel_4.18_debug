@@ -19,7 +19,7 @@
 
 extern int open_bfqq_printk;
 extern int open_bfqq_printk1;
-int vim_pid;
+int vim_pid = -2;
 /**
  * bfq_gt - compare two timestamps.
  * @a: first ts.
@@ -1868,9 +1868,8 @@ void bfq_del_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	if (bfqq->wr_coeff > 1)
 		bfqd->wr_busy_queues--;
 
-        if(open_bfqq_printk1 && strcmp("vim",current->comm) == 0){
-	    vim_pid = -1;
-	    printk("%s %d %s %d bfqq:%llx expiration:%d bfqq->wr_coeff:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,expiration,bfqq->wr_coeff);
+        if(open_bfqq_printk1 && vim_pid == bfqq->pid){
+	    printk("%s %d %s %d bfqq:%llx bfqq->pid:%d expiration:%d bfqq->wr_coeff:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,expiration,bfqq->wr_coeff);
 	}
 	bfqg_stats_update_dequeue(bfqq_group(bfqq));
 
@@ -1887,9 +1886,12 @@ void bfq_add_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	bfq_log_bfqq(bfqd, bfqq, "add to busy");
 
-        if(open_bfqq_printk1 && strcmp("vim",current->comm) == 0){
+        if(open_bfqq_printk1 && strcmp("cat",current->comm) == 0 && vim_pid == -2){
 		vim_pid = current->pid;
-	        printk("%s %d %s %d bfqq:%llx ->bfq_activate_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+        }
+        if(open_bfqq_printk1 && vim_pid == bfqq->pid){
+		vim_pid = current->pid;
+	        printk("%s %d %s %d bfqq:%llx bfqq->pid:%d ->bfq_activate_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
         }
 	bfq_activate_bfqq(bfqd, bfqq);
 

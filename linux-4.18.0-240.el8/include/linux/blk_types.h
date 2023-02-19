@@ -128,6 +128,16 @@ struct process_io_info{
 	u64  io_size;
 	//统计 hctx->dispatch 链表上有多少个req在等待派发
 	int max_hctx_list_rq_count;
+
+	int max_bfq_dispatched;
+        int max_bfq_high_prio_tmp_list_rq_count;
+        int max_bfq_rq_in_driver;
+
+	int high_prio_io_count;
+	int high_not_prio_io_count;
+	int block_io_count;
+	int block_io_count2;
+	int dispatch_io_count;
 };
 struct process_rq_stat{
 	struct request *rq;

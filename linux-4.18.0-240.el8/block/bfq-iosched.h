@@ -755,7 +755,7 @@ struct bfq_data {
 	int bfq_high_io_prio_mode;
 	struct hrtimer bfq_high_prio_timer;
         int bfq_high_io_prio_limit;
-	int bfq_high_io_prio_count;
+	int bfq_high_prio_tmp_list_rq_count;
 };
 
 enum bfqq_state_flags {

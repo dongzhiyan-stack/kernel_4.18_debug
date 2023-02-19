@@ -683,7 +683,7 @@ static void blk_account_io_merge(struct request *req)
 
 		    kmem_cache_free(req->rq_disk->process_io.process_rq_stat_cachep,req->p_process_rq_stat);
 	            atomic_dec(&(req->rq_disk->process_io.rq_in_queue));
-	            printk(KERN_DEBUG"%s rq:0x%llx merged\n",__func__,(u64)req);
+	            //printk(KERN_DEBUG"%s rq:0x%llx merged\n",__func__,(u64)req);
 		    req->p_process_rq_stat = NULL;
 		}
 	}

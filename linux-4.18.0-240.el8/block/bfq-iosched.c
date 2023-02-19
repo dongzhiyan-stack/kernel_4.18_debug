@@ -143,6 +143,7 @@
 
 extern int open_bfqq_printk;
 extern int open_bfqq_printk1;
+extern int vim_pid;
 #define HIGH_PRIO_IO_LIMIT 16
 
 #define BFQ_BFQQ_FNS(name)						\
@@ -1343,7 +1344,7 @@ static int bfq_bfqq_budget_left(struct bfq_queue *bfqq)
 {
 	struct bfq_entity *entity = &bfqq->entity;
         if(open_bfqq_printk1 && bfqq->pid == vim_pid)
-	    printk("%s %d %s %d bfqq:%llx entity:%llx entity->budget:%d entity->service:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)entity,entity->budget,entity->service);
+	    printk("%s %d %s %d bfqq:0x%llx  bfqq->pid:%d entity->budget:%d entity->service:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,entity->budget,entity->service);
 	return entity->budget - entity->service;
 }
 
@@ -1723,6 +1724,9 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 			bfqq->ttime.last_end_request +
 			bfqd->bfq_slice_idle * 3;
 
+	if(strcmp(current->comm,"cat") == 0){
+	    idle_for_long_time = 1;
+	}
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx rq:%llx bfq_bfqq_IO_bound:%d bfq_bfqq_in_large_burst:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq,bfq_bfqq_IO_bound(bfqq),bfq_bfqq_in_large_burst(bfqq));
 	/*
@@ -2236,6 +2240,8 @@ static void bfq_add_request(struct request *rq)
 	if(bfqq->wr_coeff == bfqd->bfq_wr_coeff){
 	   rq->rq_flags |= RQF_HIGH_PRIO;
 	}
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+            printk("%s %s %d bfqq:%llx rq:0x%llx RQF_HIGH_PRIO:%d bfqq->wr_coeff:%d budget:%d service:%d\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)rq,!!(rq->rq_flags&RQF_HIGH_PRIO),bfqq->wr_coeff,bfqq->entity.budget,bfqq->entity.service);
 }
 
 static struct request *bfq_find_rq_fmerge(struct bfq_data *bfqd,
@@ -2494,8 +2500,10 @@ static void bfq_bfqq_end_wr(struct bfq_queue *bfqq)
 	bfqq->wr_cur_max_time = 0;
 	bfqq->last_wr_start_finish = jiffies;
 	
-	if(open_bfqq_printk)
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid){
             printk("1:%s %d %s %d bfqq:%llx bfqq->bfqd->wr_busy_queues:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->bfqd->wr_busy_queues);
+	    dump_stack();
+	}
 	/*
 	 * Trigger a weight change on the next invocation of
 	 * __bfq_entity_update_weight_prio.
@@ -3673,14 +3681,14 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 			 */
 			bfqq->budget_timeout = jiffies;
                 
-		if(open_bfqq_printk)
-	            printk("2:%s %d %s %d bfqq:%llx bfqq->dispatched:%d ->bfq_del_bfqq_busy()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->dispatched);
+		if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+	            printk("2:%s %d %s %d bfqq:%llx bfqq->pid:%d bfqq->dispatched:%d ->bfq_del_bfqq_busy()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->dispatched);
 
 		bfq_del_bfqq_busy(bfqd, bfqq, true);
 	} else {
 		
-		if(open_bfqq_printk)
-	            printk("3:%s %d %s %d bfqq:%llx ->bfq_requeue_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+		if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+	            printk("3:%s %d %s %d bfqq:%llx bfqq->pid:%d ->bfq_requeue_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 		bfq_requeue_bfqq(bfqd, bfqq, true);
 		/*
 		 * Resort priority tree of potential close cooperators.
@@ -4607,7 +4615,7 @@ check_queue:
 	 */
 	next_rq = bfqq->next_rq;
 	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
-            printk("3:%s %d %s %d bfqq:%llx bfqq->next_rq:%llx budget:%d service:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)bfqq->next_rq,bfqq.entity->budget,bfqq.entity->service);
+	    printk("3:%s %s %d bfqq:0x%llx bfqq->next_rq:0x%llx  bfqq->pid:%d entity->budget:%d entity->service:%d bfq_bfqq_wait_request:%d bfq_better_to_idle:%d\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)bfqq->next_rq,bfqq->pid,bfqq->entity.budget,bfqq->entity.service,bfq_bfqq_wait_request(bfqq),bfq_better_to_idle(bfqq));
 	/*
 	 * If bfqq has requests queued and it has enough budget left to
 	 * serve them, keep the queue, otherwise expire it.
@@ -4778,15 +4786,15 @@ check_queue:
 		else
 			bfqq = NULL;
 
-	        if(open_bfqq_printk)
-                         printk("5:%s %d %s %d bfqq:%llx goto keep_queue\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+	        if(open_bfqq_printk1 && bfqq &&  bfqq->pid == vim_pid)
+                         printk("5:%s %d %s %d bfqq:%llx bfqq->pid:%d goto keep_queue\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 
 		goto keep_queue;
 	}
 
 	reason = BFQQE_NO_MORE_REQUESTS;
 expire:
-	if(open_bfqq_printk)
+        if(open_bfqq_printk1 && bfqq->pid == vim_pid)
             printk("7:%s %d %s %d bfq_bfqq_expire() bfqq:%llx reason:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,reason);
 	bfq_bfqq_expire(bfqd, bfqq, false, reason);
 new_queue:
@@ -4947,9 +4955,6 @@ static bool bfq_has_work(struct blk_mq_hw_ctx *hctx)
 		bfq_tot_busy_queues(bfqd) > 0;
 }
 
-extern int max_bfq_dispatched;
-extern int max_bfq_high_io_prio_count;
-extern int max_bfq_rq_in_driver;
 
 static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 {
@@ -4957,6 +4962,8 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	struct request *rq = NULL;
 	struct bfq_queue *bfqq = NULL;
 	int direct_dispatch = 0;
+	struct process_rq_stat *p_process_rq_stat_tmp = NULL;
+	struct process_io_info *p_process_io_info_tmp = NULL;
 
 	if(open_bfqq_printk)
 	    printk("1:%s %d %s %d list_empty(&bfqd->dispatch):%d\n",__func__,__LINE__,current->comm,current->pid,list_empty(&bfqd->dispatch));
@@ -5058,31 +5065,52 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	rq = bfq_dispatch_rq_from_bfqq(bfqd, bfqq);
 
 	if (rq) {
+		int time_in_queue = 0;
+                if(rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+		    p_process_rq_stat_tmp = rq->p_process_rq_stat;
+		    p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+		    time_in_queue = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_inset_time;;
+		}
+		if(bfqq->pid == vim_pid){
+		    if(time_in_queue < 1000)
+		        printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d time_in_queue:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver,time_in_queue);
+		    else
+		        printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver);
+		}
+
+                barrier();
 		if(bfqd->queue->high_io_prio_enable)
 		{
 			/***************high prio io*************************************/
 			if(rq->rq_flags & RQF_HIGH_PRIO){//高优先级IO
 			    //第一次遇到high prio io，置1 bfq_high_io_prio_mode，启动5s定时器，定时到了对bfq_high_io_prio_mode清0
 			    if(bfqd->bfq_high_io_prio_mode == 0){
-	                        printk("1:%s %s %d rq:0x%llx bfqd:0x%llx bfqq->dispatched:%d bfq_high_io_prio_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqd,bfqq->dispatched,bfqd->bfq_high_io_prio_count,bfqd->rq_in_driver);
 				bfqd->bfq_high_io_prio_mode = 1;
+				printk("%s %s %d start bfq_high_prio_timer!!!!!!!!!!!!\n",__func__,current->comm,current->pid);
 				hrtimer_start(&bfqd->bfq_high_prio_timer, ms_to_ktime(5000),HRTIMER_MODE_REL);
 			    }
+			    p_process_io_info_tmp->high_prio_io_count ++;
+	                    p_process_io_info_tmp->dispatch_io_count++;
 			}
 			else////非高优先级IO
 			{
+			   p_process_io_info_tmp->high_not_prio_io_count ++;
+
 			   if(bfqd->bfq_high_io_prio_mode)
 			   {
 			       //在 bfq_high_io_prio_mode 非0时间的5s内，如果遇到非high prio io，并且驱动队列IO个数大于限制，则把不派发该IO，而是临时添加到bfq_high_prio_tmp_list链表
-			       if((bfqd->rq_in_driver >= HIGH_PRIO_IO_LIMIT) && (bfqd->bfq_high_io_prio_count < bfqd->bfq_high_io_prio_limit)){
+			       if((bfqd->rq_in_driver >= 16) && (bfqd->bfq_high_prio_tmp_list_rq_count < 100)){
 			            //把rq从原有链表删掉并把rq移动到bfq_high_prio_tmp_list链表尾，派发时是从bfq_high_prio_tmp_list链表头取出rq，保证先到先派发
 				    //list_move_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
 				    list_add_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
 				    ///bfq_dispatch_rq_from_bfqq->bfq_dispatch_remove选中派发的rq后已经bfqq->dispatched++，这里不立即派发，先减1，等真正派发时再加1
 				    //bfqq->dispatched --;
-				    bfqd->bfq_high_io_prio_count ++;
-				    //printk("2:%s %s %d add rq:0x%llx bfqq:0x%llx bfqq->dispatched:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->dispatched);
-				    return NULL;
+				    bfqd->bfq_high_prio_tmp_list_rq_count ++;
+				    p_process_io_info_tmp->block_io_count ++;
+
+	                            //printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d bfqq->dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d !!!!!!!!!!!!\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver);
+				    rq = NULL;
+				    goto exit1;
 			       }
 			   }
                            //如果 bfq_high_prio_tmp_list上有rq，则goto exit分支，把rq添加到bfq_high_prio_tmp_list链表尾巴，而取出bfq_high_prio_tmp_list链表头的rq派发
@@ -5108,34 +5136,44 @@ exit:
 	   //放到 if(bfqd->queue->high_io_prio_enable)外边是为了保证一旦设置high_io_prio_enable为0，还能派发残留的在bfq_high_prio_tmp_list上的IO
 	   if(!list_empty(&bfqd->bfq_high_prio_tmp_list)){
 		 if(rq){
-		     //printk("3:%s %s %d add rq:0x%llx bfqq:0x%llx dispatched:%d bfq_high_io_prio_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->dispatched,bfqd->bfq_high_io_prio_count,bfqd->rq_in_driver);
 		     list_add_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
 		     //bfqq->dispatched --;
-		     bfqd->bfq_high_io_prio_count ++;
+		     bfqd->bfq_high_prio_tmp_list_rq_count ++;
+		     if(p_process_io_info_tmp)
+		         p_process_io_info_tmp->block_io_count2++;
 		 }
-
+                 barrier();
 		 rq = list_first_entry(&bfqd->bfq_high_prio_tmp_list, struct request, queuelist); 
 		 list_del_init(&rq->queuelist);
 
-		 bfqd->bfq_high_io_prio_count --;
-		 /*bfqq = RQ_BFQQ(rq);
-		 if(bfqq)
-		     bfqq->dispatched++;*/
-
+		 bfqd->bfq_high_prio_tmp_list_rq_count --;
+		 /* 
+                 barrier();
+		 if( rq && rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+                     p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+	             p_process_io_info_tmp->dispatch_io_count++;
+                 }*/
+                 
 		 bfqd->rq_in_driver++;
 		 rq->rq_flags |= RQF_STARTED;
 		 //printk("4:%s %s %d  dispatch rq:0x%llx\n",__func__,current->comm,current->pid,(u64)rq);
 	    }
         }
 
-        //printk("5:%s %s %d  dispatch rq:0x%llx bfq_high_io_prio_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,bfqd->bfq_high_io_prio_count,bfqd->rq_in_driver);
-	if(bfqd->bfq_high_io_prio_count > max_bfq_high_io_prio_count)
-	    max_bfq_high_io_prio_count = bfqd->bfq_high_io_prio_count;
-	if(bfqd->rq_in_driver > max_bfq_rq_in_driver)
-	    max_bfq_rq_in_driver = bfqd->rq_in_driver;
-        if(bfqq && bfqq->dispatched > max_bfq_dispatched)
-	    max_bfq_dispatched = bfqq->dispatched;
-
+exit1:
+	if(p_process_io_info_tmp && bfqd->bfq_high_prio_tmp_list_rq_count > p_process_io_info_tmp->max_bfq_high_prio_tmp_list_rq_count)
+	    p_process_io_info_tmp->max_bfq_high_prio_tmp_list_rq_count = bfqd->bfq_high_prio_tmp_list_rq_count;
+	if(p_process_io_info_tmp && bfqd->rq_in_driver > p_process_io_info_tmp->max_bfq_rq_in_driver)
+	    p_process_io_info_tmp->max_bfq_rq_in_driver = bfqd->rq_in_driver;
+        if(p_process_io_info_tmp && bfqq && bfqq->dispatched > p_process_io_info_tmp->max_bfq_dispatched)
+	    p_process_io_info_tmp->max_bfq_dispatched = bfqq->dispatched;
+        
+	//这段代码会导致莫名其妙crash，服了???????????????????
+        if( rq && rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
+	    p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
+	    p_process_io_info_tmp->dispatch_io_count++;
+        }
+	
 	if(open_bfqq_printk && bfqq)
 	    printk("5:%s %d %s %d dispatch bfqq:%llx belong to pid:%d req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,(u64)rq);
 	return rq;
@@ -5238,6 +5276,15 @@ void bfq_put_queue(struct bfq_queue *bfqq)
 	bfqq->ref--;
 	if (bfqq->ref)
 		return;
+         
+        
+	/*我也是服了，cat一个大文件，cat进程结束时不会执行到这里只执行到了bfq_exit_bfqq()。物理机上测试明明会的。我的猜测是，物理机上IO派发很快，虚拟机很慢
+	 * 是这样吗????????????????*/
+        if(bfqq->pid == vim_pid){
+	   vim_pid = -2;
+	   dump_stack();
+	    printk("%s %s %d bfqq:%llx bfqq->pid:%d\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	}
 
 	if (!hlist_unhashed(&bfqq->burst_list_node)) {
 		hlist_del_init(&bfqq->burst_list_node);
@@ -5333,6 +5380,12 @@ static void bfq_exit_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 
 	bfq_log_bfqq(bfqd, bfqq, "exit_bfqq: %p, %d", bfqq, bfqq->ref);
 
+	if(open_bfqq_printk1)
+	    printk("%s %s %d  bfqq:0x%llx bfqq->pid:%d\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+        if(bfqq->pid == vim_pid){
+	   vim_pid = -1;
+	   dump_stack();
+	}
 	bfq_put_cooperator(bfqq);
 
 	bfq_release_process_ref(bfqd, bfqq);
@@ -6809,7 +6862,7 @@ static enum hrtimer_restart bfq_high_prio_timer_function(struct hrtimer *timer)
 {
     struct bfq_data *bfqd = container_of(timer, struct bfq_data,bfq_high_prio_timer);
     
-    printk("%s bfqd:0x%llx bfq_high_io_prio_mode zero\n",__func__,(u64)bfqd);
+    printk("%s bfqd:0x%llx bfq_high_io_prio_mode close !!!!!!!!!!\n",__func__,(u64)bfqd);
     bfqd->bfq_high_io_prio_mode = 0;
     return HRTIMER_NORESTART;
 }
@@ -7061,7 +7114,7 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	/*****************high prio io****************************/
         INIT_LIST_HEAD(&bfqd->bfq_high_prio_tmp_list);
 	bfqd->bfq_high_io_prio_mode = 0;
-	bfqd->bfq_high_io_prio_count = 0;
+	bfqd->bfq_high_prio_tmp_list_rq_count = 0;
 	bfqd->bfq_high_io_prio_limit = 66;
 	hrtimer_init(&bfqd->bfq_high_prio_timer, CLOCK_MONOTONIC,HRTIMER_MODE_REL);
 	bfqd->bfq_high_prio_timer.function = bfq_high_prio_timer_function;

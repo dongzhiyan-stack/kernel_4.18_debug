@@ -679,7 +679,7 @@ EXPORT_SYMBOL(blk_mq_complete_request);
 void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
-
+        
 	blk_mq_sched_started_request(rq);
 
 	trace_block_rq_issue(q, rq);
@@ -810,12 +810,6 @@ void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
 }
 EXPORT_SYMBOL(free_all_process_io_info);
 
-int max_bfq_dispatched;
-int max_bfq_high_io_prio_count;
-int max_bfq_rq_in_driver;
-EXPORT_SYMBOL(max_bfq_dispatched);
-EXPORT_SYMBOL(max_bfq_high_io_prio_count);
-EXPORT_SYMBOL(max_bfq_rq_in_driver);
 void print_process_io_info(struct process_io_control *p_process_io_tmp)
 {
 	struct process_io_info *p_process_io_info_tmp = NULL;
@@ -843,7 +837,9 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 	       }
 	    }
 	}
-
+        if(!list_empty(&p_process_io_tmp->process_io_control_head)){
+	    printk("*********************************************************************************************************\n");
+	}
         //spin_lock_irq(&(p_process_io_tmp->process_lock));
         atomic_inc(&(p_process_io_tmp->read_lock_count));//类似 rcu_read_lock()开始宽限期Grace Period
 	//list_for_each_entry(p_process_io_info_tmp, &(p_process_io_tmp->process_io_control_head), process_io_info_list){
@@ -851,6 +847,7 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		if(p_process_io_info_tmp->complete_rq_count != 0)//这1s时间内，p_process_io_info_tmp代表的进程必须传输完成一个IO才会统计打印
 		{
 		    int complete_rq_count;
+		    int max_bfq_dispatched,max_bfq_high_prio_tmp_list_rq_count,max_bfq_rq_in_driver,high_prio_io_count,high_not_prio_io_count,block_io_count,block_io_count2,dispatch_io_count;
 		    u32 max_id_time,max_dc_time,max_idc_time,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,io_size,max_real_dc_time,max_hctx_list_rq_count;
 
 		    //获取 p_process_io_info_tmp 下边这些参数，最后清0，需要spin lock操作.与blk_account_io_done()对这些参数的赋值形成互斥，保证这里的清0不影响blk_account_io_done()对这些参数的赋值
@@ -872,6 +869,15 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    max_hctx_list_rq_count = p_process_io_info_tmp->max_hctx_list_rq_count;
 		    max_real_dc_time = p_process_io_info_tmp->max_real_dc_time;
 
+		    max_bfq_dispatched = p_process_io_info_tmp->max_bfq_dispatched;
+		    max_bfq_high_prio_tmp_list_rq_count = p_process_io_info_tmp->max_bfq_high_prio_tmp_list_rq_count;
+		    max_bfq_rq_in_driver = p_process_io_info_tmp->max_bfq_rq_in_driver;
+		    high_prio_io_count = p_process_io_info_tmp->high_prio_io_count;
+		    high_not_prio_io_count = p_process_io_info_tmp->high_not_prio_io_count;
+		    block_io_count = p_process_io_info_tmp->block_io_count;
+		    block_io_count2 = p_process_io_info_tmp->block_io_count2;
+		    dispatch_io_count = p_process_io_info_tmp->dispatch_io_count;
+
 		    //对p_process_io_info_tmp对应的进程传输完成的IO请求数清0
 		    p_process_io_info_tmp->complete_rq_count = 0;
 		    //对max_id_time等清0。但是有一点需要考虑，如果进程正在传输一个IO请求，比如id time很大并赋值给max_id_time，然后派发给驱动，这里对max_id_time等清0。如果这个IO请求的id time很大，那就丢失这个数据了。
@@ -889,13 +895,17 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 		    p_process_io_info_tmp->max_hctx_list_rq_count = 0;
 		    p_process_io_info_tmp->max_real_dc_time = 0;
 
+		    p_process_io_info_tmp->max_bfq_dispatched = 0;
+		    p_process_io_info_tmp->max_bfq_high_prio_tmp_list_rq_count = 0;
+		    p_process_io_info_tmp->max_bfq_rq_in_driver = 0;
+		    p_process_io_info_tmp->high_prio_io_count = 0;
+		    p_process_io_info_tmp->high_not_prio_io_count = 0;
+		    p_process_io_info_tmp->block_io_count = 0;
+		    p_process_io_info_tmp->block_io_count2 = 0;
 		    //spin_unlock_irq(&(p_process_io_tmp->io_data_lock)); 
 		    spin_unlock_irq(&(p_process_io_info_tmp->io_data_lock));
 	            
-		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus max_real_dc_time:%dus max_hctx_list_rq:%d rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus max_bfq_dispatched:%d max_bfq_high_io_prio_count:%d max_bfq_rq_in_driver:%d\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,max_real_dc_time,max_hctx_list_rq_count,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,max_bfq_dispatched,max_bfq_high_io_prio_count,max_bfq_rq_in_driver);
-	            max_bfq_dispatched = 0;
-                    max_bfq_high_io_prio_count = 0;
-		    max_bfq_rq_in_driver = 0;
+		    printk("%s %d rq_count:%d io_size:%dM max_id_time:%dus max_dc_time:%dus max_idc_time:%dus max_real_dc_time:%dus max_hctx_list_rq:%d rq_inflght_issue:%d_%d rq_inflght_done:%d_%d  avg_id_time:%dus avg_dc_time:%dus avg_idc_time:%dus max dispatched:%d high_prio_list_rq_count:%d rq_in_driver:%d*****dispatch high_prio_io:%d not_prio_io:%d block_io_count:%d block_io_count2:%d real_dispatch_io_count:%d\n",p_process_io_info_tmp->comm,p_process_io_info_tmp->pid,complete_rq_count,io_size,max_id_time,max_dc_time,max_idc_time,max_real_dc_time,max_hctx_list_rq_count,rq_inflght_issue_queue,rq_inflght_issue_driver,rq_inflght_done_queue,rq_inflght_done_driver,avg_id_time,avg_dc_time,avg_idc_time,max_bfq_dispatched,max_bfq_high_prio_tmp_list_rq_count,max_bfq_rq_in_driver,high_prio_io_count,high_not_prio_io_count,block_io_count,block_io_count2,dispatch_io_count);
 
 		    if(p_process_io_info_tmp->rq_empty_count != 0)
 		    {
