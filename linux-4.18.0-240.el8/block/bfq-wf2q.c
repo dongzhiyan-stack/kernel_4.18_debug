@@ -1142,13 +1142,15 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 	/**************************************************************************/
 	//如果bfqq->wr_coeff是30说明是交互式io，执行到这里说明派发这个进程派发的IO太多了，配合消耗完了还没派发完io。此时说明该进程的bfqq需要提升权重，提高游戏那几，作为high prio io.
 	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
-	if(bfqq && bfqq->wr_coeff == 30){
+	if(bfqq && bfqq->bfqd->queue->high_io_prio_enable && bfqq->wr_coeff == 30){
 	    bfqq->wr_coeff = 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR; 
 	    //置1表示权重变了，然后才会在bfq_update_fin_time_enqueue->__bfq_entity_update_weight_prio 里真正提升权重
 	    entity->prio_changed = 1;
 	    //增大权重提升时间为1.5s
 	    bfqq->wr_cur_max_time = msecs_to_jiffies(1500);
-	    printk("%s %s %d bfqq:%llx bfqq->pid:%d is high prio io\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	    //权重提升时间开始时间为当前时间
+	    bfqq->last_wr_start_finish = jiffies;
+	    printk("%s %s %d bfqq:%llx bfqq->pid:%d is high prio io*************\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 	}
 	if (entity == sd->in_service_entity) {
 		if(open_bfqq_printk)
@@ -1897,11 +1899,10 @@ void bfq_add_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	bfq_log_bfqq(bfqd, bfqq, "add to busy");
 
-        if(open_bfqq_printk1 && strcmp("cat",current->comm) == 0 && vim_pid == -2){
+        if(strcmp("cat",current->comm) == 0 && vim_pid == -2){
 		vim_pid = current->pid;
         }
         if(open_bfqq_printk1 && vim_pid == bfqq->pid){
-		vim_pid = current->pid;
 	        printk("%s %d %s %d bfqq:%llx bfqq->pid:%d ->bfq_activate_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
         }
 	bfq_activate_bfqq(bfqd, bfqq);

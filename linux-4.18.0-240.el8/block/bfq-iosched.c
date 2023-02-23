@@ -1141,10 +1141,16 @@ static void bfq_add_to_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		 */
 		hlist_for_each_entry(bfqq_item, &bfqd->burst_list,
 				     burst_list_node)
+		{
+                        if(open_bfqq_printk1)
+	                    printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 			bfq_mark_bfqq_in_large_burst(bfqq_item);
+		}
 		bfq_mark_bfqq_in_large_burst(bfqq);
-                if(open_bfqq_printk1)
-	            printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+                if(open_bfqq_printk1){
+	            printk("2:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+		    //dump_stack();
+		}
 
 		/*
 		 * From now on, and until the current burst finishes, any
@@ -1319,8 +1325,10 @@ static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	 */
 	if (bfqd->large_burst) {
 		bfq_mark_bfqq_in_large_burst(bfqq);
-                if(open_bfqq_printk1)
+                if(open_bfqq_printk1){
 	            printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+		    //dump_stack();
+		}
 		goto end;
 	}
 
@@ -1565,6 +1573,7 @@ static void bfq_update_bfqq_wr_on_rq_arrival(struct bfq_data *bfqd,
 {
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx old_wr_coeff:%d wr_or_deserves_wr:%d interactive:%d in_burst:%d soft_rt:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,old_wr_coeff,wr_or_deserves_wr,interactive,in_burst,soft_rt);
+
 	if (old_wr_coeff == 1 && wr_or_deserves_wr) {
 		/* start a weight-raising period */
 		if (interactive) {
@@ -1707,7 +1716,7 @@ static bool bfq_bfqq_higher_class_or_weight(struct bfq_queue *bfqq,
 
 	return bfqq_weight > in_serv_weight;
 }
-
+extern int bfq_prevent_high_prio_count;
 static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 					     struct bfq_queue *bfqq,
 					     int old_wr_coeff,
@@ -1726,10 +1735,6 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 			bfqq->ttime.last_end_request +
 			bfqd->bfq_slice_idle * 3;
 
-	if((bfqq->wr_coeff == 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR) && (idle_for_long_time == 0)){
-	    printk("%s %d %s %d bfqq:%llx bfqq->pid:%d force idle_for_long_time = 1\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
-	    idle_for_long_time = 1;
-	}
 
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx rq:%llx bfq_bfqq_IO_bound:%d bfq_bfqq_in_large_burst:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)rq,bfq_bfqq_IO_bound(bfqq),bfq_bfqq_in_large_burst(bfqq));
@@ -1752,8 +1757,11 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
         /****************如果同一个线程组的进程近期有in_large_burst属性，禁止它新创建的线程被判定为交互式io***********************************************/
 	if((bfqd->large_burst_process_count > 1) &&(bfqd->large_burst_process_tgid == current->tgid) && strncmp(bfqd->large_burst_process_name,current->comm,COMM_LEN-1) == 0){
 	    *interactive = 0;
-            printk("%s %s %d  prevent in_large_burst bfqq:%llx to interactive io\n",__func__,current->comm,current->pid,(u64)bfqq);
+	    soft_rt = 0;
+	    in_burst = 1;
+	    bfq_prevent_high_prio_count++;
 	}
+
         if(open_bfqq_printk)
 	       printk("1:%s %d %s %d bfqq:%llx bfqq->wr_coeff:%d bfq_bfqq_sync(bfqq):%d bfqq->bic:%llx *interactive:%d soft_rt:%d in_burst:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->wr_coeff,bfq_bfqq_sync(bfqq),(u64)bfqq->bic,*interactive,soft_rt,in_burst);
 
@@ -1761,7 +1769,14 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 		(bfqq->wr_coeff > 1 ||
 		 (bfq_bfqq_sync(bfqq) &&
 		  bfqq->bic && (*interactive || soft_rt)));
-
+        //禁止high prio io进程被判定为rt、interactive 、burst 型io，这样下边的bfq_update_bfqq_wr_on_rq_arrival()函数不会修改它的 bfqq->wr_coeff
+	if(bfqq->wr_coeff == 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR){
+	    printk("%s %d %s %d bfqq:%llx bfqq->pid:%d forece bfqq->wr_coeff == 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR ***********\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	    *interactive = 0;
+	    wr_or_deserves_wr = 0;
+            in_burst = 0;
+	    soft_rt = 0;
+	}
 	/*
 	 * Using the last flag, update budget and check whether bfqq
 	 * may want to preempt the in-service queue.
@@ -1836,6 +1851,10 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 			if (old_wr_coeff != bfqq->wr_coeff)
 				bfqq->entity.prio_changed = 1;
 		}
+	}
+        
+	if(strcmp("fio",current->comm) == 0 && bfqq->wr_coeff !=1 ){
+	    printk("%s %d %s %d bfqq:%llx bfqq->pid:%d bfqq->wr_coeff:%d ***********\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->wr_coeff);
 	}
 
 	bfqq->last_idle_bklogged = jiffies;
@@ -2254,7 +2273,7 @@ static void bfq_add_request(struct request *rq)
                 if(current->tgid != bfqd->large_burst_process_tgid){
 	            bfqd->large_burst_process_tgid = current->tgid;
 	            strncpy(bfqd->large_burst_process_name,current->comm,COMM_LEN-1);
-		    printk("%s %s %d bfqq:%llx in_large_burst count\n",__func__,current->comm,current->pid,(u64)bfqq);
+		    printk("%s %s %d bfqq:%llx in_large_burst  last count:%d*********\n",__func__,current->comm,current->pid,(u64)bfqq,bfqd->large_burst_process_count);
 		    bfqd->large_burst_process_count = 0;
                 }else{
 		    bfqd->large_burst_process_count ++;
@@ -2265,7 +2284,7 @@ static void bfq_add_request(struct request *rq)
 	   rq->rq_flags |= RQF_HIGH_PRIO;
 	}
 	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
-            printk("%s %s %d bfqq:%llx rq:0x%llx RQF_HIGH_PRIO:%d bfqq->wr_coeff:%d budget:%d service:%d\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)rq,!!(rq->rq_flags&RQF_HIGH_PRIO),bfqq->wr_coeff,bfqq->entity.budget,bfqq->entity.service);
+            printk("%s %s %d bfqq:%llx rq:0x%llx RQF_HIGH_PRIO:%d bfqq->wr_coeff:%d budget:%d service:%d bfqq->last_wr_start_finish:%ld\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)rq,!!(rq->rq_flags&RQF_HIGH_PRIO),bfqq->wr_coeff,bfqq->entity.budget,bfqq->entity.service,bfqq->last_wr_start_finish);
 }
 
 static struct request *bfq_find_rq_fmerge(struct bfq_data *bfqd,
@@ -2518,16 +2537,16 @@ static void bfq_requests_merged(struct request_queue *q, struct request *rq,
 /* Must be called with bfqq != NULL */
 static void bfq_bfqq_end_wr(struct bfq_queue *bfqq)
 {
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid){
+            printk("1:%s %d %s %d bfqq:%llx bfqq->pid:%d bfqq->wr_coeff:%d wr_busy_queues:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->wr_coeff,bfqq->bfqd->wr_busy_queues);
+	    dump_stack();
+	}
 	if (bfq_bfqq_busy(bfqq))
 		bfqq->bfqd->wr_busy_queues--;
 	bfqq->wr_coeff = 1;
 	bfqq->wr_cur_max_time = 0;
 	bfqq->last_wr_start_finish = jiffies;
 	
-	if(open_bfqq_printk1 && bfqq->pid == vim_pid){
-            printk("1:%s %d %s %d bfqq:%llx bfqq->bfqd->wr_busy_queues:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->bfqd->wr_busy_queues);
-	    dump_stack();
-	}
 	/*
 	 * Trigger a weight change on the next invocation of
 	 * __bfq_entity_update_weight_prio.
@@ -3695,9 +3714,9 @@ static bool __bfq_bfqq_expire(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	 */
 	if (RB_EMPTY_ROOT(&bfqq->sort_list) &&
 	    !(reason == BFQQE_PREEMPTED &&
-	      idling_needed_for_service_guarantees(bfqd, bfqq)) &&
-	      //high prio io类进程的bfqq，即便没有rq过过期失效，也不能添加到st->idle tree，只能添加到st->active tree。主要防止出现长时间调度延迟
-	      bfqq->wr_coeff != 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR)
+	      idling_needed_for_service_guarantees(bfqd, bfqq))
+	      //high prio io类进程的bfqq，即便没有rq过过期失效，也不能添加到st->idle tree，只能添加到st->active tree。主要防止出现长时间调度延迟-----会导致卡死，去除
+	      /*bfqq->wr_coeff != 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR*/)
 	 {
 		if (bfqq->dispatched == 0)
 			/*
@@ -4866,8 +4885,10 @@ static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		 * time has elapsed from the beginning of this
 		 * weight-raising period, then end weight raising.
 		 */
-		if (bfq_bfqq_in_large_burst(bfqq))
-			bfq_bfqq_end_wr(bfqq);
+		if (bfq_bfqq_in_large_burst(bfqq)){
+	            printk("%s %d %s %d bfqq:%llx bfq_bfqq_in_large_burst bfqq->pid:%d bfqq->wr_coeff:%d***********\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->wr_coeff);
+		    bfq_bfqq_end_wr(bfqq);
+		}
 		else if (time_is_before_jiffies(bfqq->last_wr_start_finish +
 						bfqq->wr_cur_max_time)) {
 			if(open_bfqq_printk)
@@ -4891,7 +4912,9 @@ static void bfq_update_wr_data(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 		}
 		if (bfqq->wr_coeff > 1 &&
 		    bfqq->wr_cur_max_time != bfqd->bfq_wr_rt_max_time &&
-		    bfqq->service_from_wr > max_service_from_wr) {
+		    bfqq->service_from_wr > max_service_from_wr &&
+		    bfqq->wr_coeff != 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR)//high prio io进程禁止在这里结束权重提升
+		{
 			if(open_bfqq_printk)
 		            printk("5:%s %d %s %d if (bfqq->wr_coeff > 1 &&...\n",__func__,__LINE__,current->comm,current->pid);
 			/* see comments on max_service_from_wr */
@@ -5099,9 +5122,9 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 		    time_in_queue = ktime_to_us(ktime_get()) - p_process_rq_stat_tmp->rq_inset_time;;
 		}
 		if(bfqq->pid == vim_pid){
-		    if(time_in_queue < 1000)
-		        printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d time_in_queue:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver,time_in_queue);
-		    else
+		    if(time_in_queue >= 1000)
+		        printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d time_in_queue:%dms\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver,time_in_queue/1000);
+		    else if(open_bfqq_printk1)
 		        printk("%s %s %d rq:0x%llx bfqq:0x%llx pid:%d dispatched:%d bfq_high_prio_tmp_list_rq_count:%d rq_in_driver:%d\n",__func__,current->comm,current->pid,(u64)rq,(u64)bfqq,bfqq->pid,bfqq->dispatched,bfqd->bfq_high_prio_tmp_list_rq_count,bfqd->rq_in_driver);
 		}
 
@@ -5113,8 +5136,8 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 			    //第一次遇到high prio io，置1 bfq_high_io_prio_mode，启动5s定时器，定时到了对bfq_high_io_prio_mode清0
 			    if(bfqd->bfq_high_io_prio_mode == 0){
 				bfqd->bfq_high_io_prio_mode = 1;
-				printk("%s %s %d start bfq_high_prio_timer!!!!!!!!!!!!\n",__func__,current->comm,current->pid);
-				hrtimer_start(&bfqd->bfq_high_prio_timer, ms_to_ktime(5000),HRTIMER_MODE_REL);
+				printk("%s %s %d start bfq_high_prio_timer**************\n",__func__,current->comm,current->pid);
+				hrtimer_start(&bfqd->bfq_high_prio_timer, ms_to_ktime(3000),HRTIMER_MODE_REL);
 			    }
 			    p_process_io_info_tmp->high_prio_io_count ++;
 	                    p_process_io_info_tmp->dispatch_io_count++;
@@ -5126,7 +5149,7 @@ static struct request *__bfq_dispatch_request(struct blk_mq_hw_ctx *hctx)
 			   if(bfqd->bfq_high_io_prio_mode)
 			   {
 			       //在 bfq_high_io_prio_mode 非0时间的5s内，如果遇到非high prio io，并且驱动队列IO个数大于限制，则把不派发该IO，而是临时添加到bfq_high_prio_tmp_list链表
-			       if((bfqd->rq_in_driver >= 16) && (bfqd->bfq_high_prio_tmp_list_rq_count < 100)){
+			       if((bfqd->rq_in_driver >= 16) /*&& (bfqd->bfq_high_prio_tmp_list_rq_count < 100)*/){
 			            //把rq从原有链表删掉并把rq移动到bfq_high_prio_tmp_list链表尾，派发时是从bfq_high_prio_tmp_list链表头取出rq，保证先到先派发
 				    //list_move_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
 				    list_add_tail(&rq->queuelist,&bfqd->bfq_high_prio_tmp_list);
@@ -5410,7 +5433,7 @@ static void bfq_exit_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	if(open_bfqq_printk1)
 	    printk("%s %s %d  bfqq:0x%llx bfqq->pid:%d\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
         if(bfqq->pid == vim_pid){
-	   vim_pid = -1;
+	   vim_pid = -2;
 	   dump_stack();
 	}
 	bfq_put_cooperator(bfqq);
@@ -6601,8 +6624,10 @@ static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
 	if (split && is_sync) {
 		if ((bic->was_in_burst_list && bfqd->large_burst) ||
 		    bic->saved_in_large_burst){
-	                if(open_bfqq_printk1)
+	                if(open_bfqq_printk1){
                            printk("3:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+			   //dump_stack();
+			}
 			bfq_mark_bfqq_in_large_burst(bfqq);
 		}
 		else {

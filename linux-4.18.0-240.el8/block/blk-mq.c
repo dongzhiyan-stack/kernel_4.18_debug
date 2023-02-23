@@ -809,7 +809,8 @@ void free_all_process_io_info(struct process_io_control *p_process_io_tmp)
 	printk("free_all_process_io_info ok\n");
 }
 EXPORT_SYMBOL(free_all_process_io_info);
-
+int bfq_prevent_high_prio_count = 0;
+EXPORT_SYMBOL(bfq_prevent_high_prio_count);
 void print_process_io_info(struct process_io_control *p_process_io_tmp)
 {
 	struct process_io_info *p_process_io_info_tmp = NULL;
@@ -838,7 +839,8 @@ void print_process_io_info(struct process_io_control *p_process_io_tmp)
 	    }
 	}
         if(!list_empty(&p_process_io_tmp->process_io_control_head)){
-	    printk("*********************************************************************************************************\n");
+	    printk("bfq_prevent_high_prio_count:%d*********************************************************************************************************\n",bfq_prevent_high_prio_count);
+	    bfq_prevent_high_prio_count = 0;
 	}
         //spin_lock_irq(&(p_process_io_tmp->process_lock));
         atomic_inc(&(p_process_io_tmp->read_lock_count));//类似 rcu_read_lock()开始宽限期Grace Period
