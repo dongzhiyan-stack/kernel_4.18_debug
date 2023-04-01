@@ -1755,11 +1755,18 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	*interactive = !in_burst && idle_for_long_time;
 
         /****************如果同一个线程组的进程近期有in_large_burst属性，禁止它新创建的线程被判定为交互式io***********************************************/
-	if((bfqd->large_burst_process_count > 1) &&(bfqd->large_burst_process_tgid == current->tgid) && strncmp(bfqd->large_burst_process_name,current->comm,COMM_LEN-1) == 0){
+	if((bfqd->large_burst_process_count > 1) &&(bfqd->large_burst_process_tgid == current->tgid) && (strncmp(bfqd->large_burst_process_name,current->comm,COMM_LEN-1) == 0)){
 	    *interactive = 0;
 	    soft_rt = 0;
 	    in_burst = 1;
 	    bfq_prevent_high_prio_count++;
+            printk("%s %s %d bfqq:%llx bfq_prevent_high_prio_count:%d ************\n",__func__,current->comm,current->pid,(u64)bfqq,bfq_prevent_high_prio_count);
+	}
+        //该if成立，说明当前进程最近被判定为high prio io。这样等该进程再进程新的IO传输时，强制令该进程被判定为 high prio io。否则，只能被判断为交互式 io。
+	//bfqq->bfqq_list 是NULL说明该进程是新创建的。否则可能该bfqq过期失效而处于st->idle tree，现在又派发rq，此时该if不成立
+	if((bfqq->wr_coeff == 1) && !list_empty(&bfqq->bfqq_list) && (strncmp(bfqd->last_high_prio_io_process,current->comm,COMM_LEN-1)) == 0){
+            bfqq->wr_coeff = 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR;	
+            printk("%s %s %d find  high prio io in history bfqq:0x%llx ************\n",__func__,current->comm,current->pid,(u64)bfqq);
 	}
 
         if(open_bfqq_printk)
@@ -1776,6 +1783,8 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
 	    wr_or_deserves_wr = 0;
             in_burst = 0;
 	    soft_rt = 0;
+    	    //保存最近high prio io进程的名字。用不用再启动一个定时器，每10分钟清0一次last_high_prio_io_process，保证长时间没有IO传输时不再保存high prio io信息??????????????????????????
+	    strncpy(bfqd->last_high_prio_io_process,current->comm,COMM_LEN-1);
 	}
 	/*
 	 * Using the last flag, update budget and check whether bfqq
@@ -2284,7 +2293,7 @@ static void bfq_add_request(struct request *rq)
 	   rq->rq_flags |= RQF_HIGH_PRIO;
 	}
 	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
-            printk("%s %s %d bfqq:%llx rq:0x%llx RQF_HIGH_PRIO:%d bfqq->wr_coeff:%d budget:%d service:%d bfqq->last_wr_start_finish:%ld\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)rq,!!(rq->rq_flags&RQF_HIGH_PRIO),bfqq->wr_coeff,bfqq->entity.budget,bfqq->entity.service,bfqq->last_wr_start_finish);
+            printk("%s %s %d bfqq:%llx rq:0x%llx RQF_HIGH_PRIO:%d bfqq->wr_coeff:%d budget:%d service:%d weight:%d bfqq->last_wr_start_finish:%ld\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)rq,!!(rq->rq_flags&RQF_HIGH_PRIO),bfqq->wr_coeff,bfqq->entity.budget,bfqq->entity.service,bfqq->entity.weight,bfqq->last_wr_start_finish);
 }
 
 static struct request *bfq_find_rq_fmerge(struct bfq_data *bfqd,
@@ -2541,6 +2550,14 @@ static void bfq_bfqq_end_wr(struct bfq_queue *bfqq)
             printk("1:%s %d %s %d bfqq:%llx bfqq->pid:%d bfqq->wr_coeff:%d wr_busy_queues:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->wr_coeff,bfqq->bfqd->wr_busy_queues);
 	    dump_stack();
 	}
+	//保存最近high prio io进程的名字。用不用再启动一个定时器，每10分钟清0一次last_high_prio_io_process，保证长时间没有IO传输时不再保存high prio io信息??????????????????????????
+        /*if(bfqq->wr_coeff == 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR){
+	    //此时处于派发rq流程，当前的进程PID和 bfqq->pid 不相等.需要根据bfqq->pid这个进程PID找到进程名字，然后保存到bfqq->bfqd->last_high_prio_io_process。
+	    //但是不好操作，还是把这段代码放到bfq_bfqq_handle_idle_busy_switch()，该函数bfqq->pid和current->pid是相等的
+	    //strncpy(bfqq->bfqd->last_high_prio_io_process,current->comm,COMM_LEN-1);
+            printk("%s %d %s %d bfqq:%llx bfqq->pid:%d is BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR bfqq\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	}*/
+            
 	if (bfq_bfqq_busy(bfqq))
 		bfqq->bfqd->wr_busy_queues--;
 	bfqq->wr_coeff = 1;
@@ -4961,6 +4978,19 @@ static struct request *bfq_dispatch_rq_from_bfqq(struct bfq_data *bfqd,
 	if (bfqq != bfqd->in_service_queue)
 		goto return_rq;
 
+	/****************************************/
+        if(bfqd->queue->high_io_prio_enable){
+	    if(bfqq->wr_coeff == 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR){
+	        //累加bfqq传输完成的rq的数据量,如果bfqq传输数据量太多而超过限制，强制令进程bfqq不再有high prio io属性
+		bfqq->entity.completed_size += blk_rq_bytes(rq);
+	        if(bfqq->entity.completed_size > bfqd->high_prio_io_all_size_limit){
+		    //bfqq->last_wr_start_finish = jiffies;
+		    //bfqq->wr_cur_max_time = 0;
+		    bfq_bfqq_end_wr(bfqq);
+		    printk("%s %s %d bfqq:0x%llx bfqq->pid:%d high prio io dispatche rq exceed limit**********\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+		}
+	    }
+	}
 	/*
 	 * If weight raising has to terminate for bfqq, then next
 	 * function causes an immediate update of bfqq's weight,
@@ -5223,7 +5253,7 @@ exit1:
 	    p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
 	    p_process_io_info_tmp->dispatch_io_count++;
         }
-	
+
 	if(open_bfqq_printk && bfqq)
 	    printk("5:%s %d %s %d dispatch bfqq:%llx belong to pid:%d req:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid,(u64)rq);
 	return rq;
@@ -5612,6 +5642,11 @@ static void bfq_init_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 
 	/* first request is almost certainly seeky */
 	bfqq->seek_history = 1;
+
+	/**********************************************/
+	//必须初始化链表成员无效，__bfq_activate_entity()里只有该链表成员无效才能添加到deadline_head链表
+	bfqq->deadline_list.next = LIST_POISON1;
+	bfqq->deadline_list.prev = LIST_POISON2;
 	if(open_bfqq_printk)
 	printk("%s %d %s %d bfqq:%llx bfqd:%llx sync:%d bfqq->pid:%d bfqq->max_budget:%d bfqq->budget_timeout:%lu\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,(u64)bfqd,is_sync,pid,bfqq->max_budget,bfqq->budget_timeout);
 }
@@ -7171,6 +7206,12 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	hrtimer_init(&bfqd->bfq_high_prio_timer, CLOCK_MONOTONIC,HRTIMER_MODE_REL);
 	bfqd->bfq_high_prio_timer.function = bfq_high_prio_timer_function;
         bfqd->large_burst_process_count = 0;
+	bfqd->high_prio_io_all_size_limit = 209715200;//200M
+	if(HZ < 200)
+	    bfqd->high_prio_io_schedule_deadline = 1;//5ms
+	else
+	    bfqd->high_prio_io_schedule_deadline = HZ/200;//5ms
+	INIT_LIST_HEAD(&bfqd->deadline_head);
 	/*
 	 * The invocation of the next bfq_create_group_hierarchy
 	 * function is the head of a chain of function calls

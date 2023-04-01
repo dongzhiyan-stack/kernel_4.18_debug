@@ -90,6 +90,7 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 	struct bfq_entity *next_in_service = sd->next_in_service;
 	bool parent_sched_may_change = false;
 	bool change_without_lookup = false;
+	struct bfq_queue *bfqq = NULL;
 
 	/*
 	 * If this update is triggered by the activation, requeueing
@@ -165,6 +166,15 @@ static bool bfq_update_next_in_service(struct bfq_sched_data *sd,
 
 	if (!next_in_service)
 		return parent_sched_may_change;
+
+	/*************************************/
+	bfqq = bfq_entity_to_bfqq(next_in_service);
+	//到这里，如果bfqq已经添加到了 deadline_head 链表则要剔除掉。说明该bfqq在截至时间到来时就已经得到派发机会了
+        if(bfqq->deadline_list.next != LIST_POISON1 && bfqq->deadline_list.prev != LIST_POISON2){
+	    //printk("%s %s %d bfqq:%llx bfqq->pid:%d list_del(&bfqq->deadline_list)************\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	    //dump_stack();
+	    list_del(&bfqq->deadline_list);
+	}
 
 	return parent_sched_may_change;
 }
@@ -1062,6 +1072,16 @@ static void __bfq_activate_entity(struct bfq_entity *entity,
 	bool backshifted = false;
 	unsigned long long min_vstart;
 
+	/************************************************/
+	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
+	//high prio io的bfqq，记录激活加入st->active tree的时间点。在 high_prio_io_schedule_deadline 时间点到期后，该bfqq必须被调度到派发rq。
+	//这是针对从st->idle tree激活添加到st->active tree的bfqq，是否有必要针对__bfq_requeue_entity的bfqq也这样操作呢?????????????????????????????????
+	//bfqq->deadline_list->prev 和 next 必须是LIST_POISON2/LIST_POISON1 ，说明没有添加到链表上
+	if((bfqq->deadline_list.prev == LIST_POISON2) && (bfqq->deadline_list.next == LIST_POISON1) && (bfqq->wr_coeff == 30 * BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR)){
+	   bfqq->high_prio_io_active_time = jiffies;
+	   list_add_tail(&bfqq->deadline_list, &bfqq->bfqd->deadline_head);
+	}
+
 	/* See comments on bfq_fqq_update_budg_for_activation */
 	if (non_blocking_wait_rq && bfq_gt(st->vtime, entity->finish)) {
 		backshifted = true;
@@ -1150,6 +1170,7 @@ static void __bfq_requeue_entity(struct bfq_entity *entity)
 	    bfqq->wr_cur_max_time = msecs_to_jiffies(1500);
 	    //权重提升时间开始时间为当前时间
 	    bfqq->last_wr_start_finish = jiffies;
+	    bfqq->entity.completed_size = 0;
 	    printk("%s %s %d bfqq:%llx bfqq->pid:%d is high prio io*************\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 	}
 	if (entity == sd->in_service_entity) {
@@ -1623,6 +1644,30 @@ static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
 	struct bfq_entity *entity = NULL;
 	int class_idx = 0;
 
+        /*****************************************************************/
+	struct bfq_queue *bfqq = bfq_entity_to_bfqq(sd->next_in_service);
+	struct bfq_data *bfqd = bfqq->bfqd;
+
+	//high prio io的bfqq在加入st->active tree后。high_prio_io_schedule_deadline时间到了，必须立即得到调度派发rq。我这里相当于没
+	//执行bfq_lookup_next_entity正常的查找next entity的流程，这样可能会影响bfq调度算法，比如下边的sd->bfq_class_idle_last_service没更新????????????需要后续研究?????????
+	
+	//不用遍历链表，只有看链表头第一个成员是否超时，第一个没超时，后边的更不会超时
+	//list_for_each_entry(bfqq, &bfqd->deadline_head,deadline_list)
+	if(!list_empty(&bfqd->deadline_head)){
+	    bfqq = list_first_entry(&bfqd->deadline_head, struct bfq_queue,deadline_list);
+	    if(time_is_before_jiffies(bfqq->high_prio_io_active_time + bfqd->high_prio_io_schedule_deadline)){
+	        entity = &bfqq->entity;
+		//要把该bfqq和entity从st->active tree剔除掉，不能在这里bfq_active_extract()从active tree剔除。因为这个entity接下来就是sd->next_in_service
+		//在bfq_select_queue->bfq_set_in_service_queue->bfq_get_next_queue函数流程，把该entity赋于sd->in_service_entity时，本身就会执行bfq_active_extract()
+                //bfq_active_extract(bfq_entity_service_tree(entity),entity);
+
+		//该bfqq要从 deadline_head 链表剔除
+	        list_del(&bfqq->deadline_list);
+	        printk("%s %s %d bfqq:%llx bfqq->pid:%d high prio io get schedue active:%ld jifies:%ld************\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid,bfqq->high_prio_io_active_time,jiffies);
+		return entity;
+	    }
+	}
+
         if(open_bfqq_printk)
 	    printk("1:%s %d %s %d\n",__func__,__LINE__,current->comm,current->pid);
 	/*
@@ -1678,7 +1723,19 @@ static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
 
 	if (!entity)
 		return NULL;
-
+	/*从deadline_head链表剔除bfqq的代码不能放在这里，因为 bfq_activate_requeue_entity->bfq_update_next_in_service() ，把bfqq加入st->active tree后，在bfq_update_next_in_service()
+	 *函数直接返回这个bfqq的entity，不会再执行 bfq_update_next_in_service()->bfq_lookup_next_entity()，就不会执行这里的代码，把bfqq从deadline_head链表剔除了。然后这个bfqq的entity就
+	 作为sd->in_service_entity，然后bfqq从st->active tree和bfqd->active_list剔除。。后续再执行bfq_lookup_next_entity查找next entity时，就会在bfq_lookup_next_entity()函数开头，
+	 从deadline_head链表返回这个bfqq的entity。作为sd->in_serv_entity这就出问题了，因为这个bfqq的entity可能已经从st->active tree和 bfqd->active_list剔除了。此时会再次把bfqq从
+	 bfqd->active_list剔除，double 剔除，内核crash*/
+	/*
+	bfqq = bfq_entity_to_bfqq(entity);
+	//到这里，如果bfqq已经添加到了 deadline_head 链表则要剔除掉，因为说明该bfqq在截至时间到来时就已经得到派发机会了
+        if(bfqq->deadline_list.next != LIST_POISON1 && bfqq->deadline_list.prev != LIST_POISON2){
+	    printk("%s %s %d bfqq:%llx bfqq->pid:%d list_del(&bfqq->deadline_list)************\n",__func__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
+	    list_del(&bfqq->deadline_list);
+	}
+        */
 	return entity;
 }
 
@@ -1899,10 +1956,8 @@ void bfq_add_bfqq_busy(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
 	bfq_log_bfqq(bfqd, bfqq, "add to busy");
 
-        if(strcmp("cat",current->comm) == 0 && vim_pid == -2){
+        if(open_bfqq_printk1 && strcmp("cat",current->comm) == 0 && vim_pid == -2){
 		vim_pid = current->pid;
-        }
-        if(open_bfqq_printk1 && vim_pid == bfqq->pid){
 	        printk("%s %d %s %d bfqq:%llx bfqq->pid:%d ->bfq_activate_bfqq()\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
         }
 	bfq_activate_bfqq(bfqd, bfqq);

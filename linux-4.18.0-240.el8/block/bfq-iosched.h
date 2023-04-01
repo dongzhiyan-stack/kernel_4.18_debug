@@ -205,6 +205,10 @@ struct bfq_entity {
 
 	/* flag, set if the entity is counted in groups_with_pending_reqs */
 	bool in_groups_with_pending_reqs;
+
+	/******************************************/
+	//累加传输完成的所有rq对应的数据量
+	u32 completed_size;
 };
 
 struct bfq_group;
@@ -388,6 +392,10 @@ struct bfq_queue {
 	 * the woken queues when this queue exits.
 	 */
 	struct hlist_head woken_list;
+
+	/****************************************/
+	unsigned long high_prio_io_active_time;
+	struct list_head deadline_list;
 };
 
 /**
@@ -752,15 +760,31 @@ struct bfq_data {
 	unsigned int word_depths[2][2];
 
 	/********high prio io******************************/
+	//派发high prio io有效期内，把非普通进程的rq先临时添加到该链表，延迟派发
 	struct list_head bfq_high_prio_tmp_list;
+	//置1表示是high prio io模式
 	int bfq_high_io_prio_mode;
+	//high prio io模式定时器，时间到后对 bfq_high_io_prio_mode清0，退出high prio io模式
 	struct hrtimer bfq_high_prio_timer;
+	//在bfq_high_prio_tmp_list 上rq上限值，超过不能再向该链表添加普通rq，必须立即派发普通rq
         int bfq_high_io_prio_limit;
+	//在bfq_high_prio_tmp_list上的rq个数
 	int bfq_high_prio_tmp_list_rq_count;
+	//记录最近的 large_burst 进程的进程组ID
 	int large_burst_process_tgid;
         #define  COMM_LEN	16
+	//记录最近的 large_burst 进程的名字
         char large_burst_process_name[COMM_LEN];
+	//记录最近的 large_burst 进程的线程个数
 	int large_burst_process_count;
+        //记录最近的high prio io的进程名字
+        char last_high_prio_io_process[COMM_LEN];
+	//累加bfqq传输完成的rq的数据量,如果bfqq传输数据量太多而超过限制，强制令进程bfqq不再有high prio io属性
+	u32 high_prio_io_all_size_limit;
+	//high prio io 的bfqq在active 后，high_prio_io_schedule_deadline 时间后，必须得到调度，单位ms
+	u32 high_prio_io_schedule_deadline;
+	//high prio io 的bfqq在active 后，添加到该链表
+	struct list_head deadline_head;
 };
 
 enum bfqq_state_flags {
