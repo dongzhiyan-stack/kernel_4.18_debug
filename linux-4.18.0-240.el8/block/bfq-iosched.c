@@ -1120,8 +1120,8 @@ static void bfq_reset_burst_list(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 /* Add bfqq to the list of queues in current burst (see bfq_handle_burst) */
 static void bfq_add_to_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 {
-        if(open_bfqq_printk)
-	    printk("1:%s %d %s %d bfqq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+        if(open_bfqq_printk1)
+	    printk("1:%s %d %s %d bfqq:%llx bfqd->burst_size:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqd->burst_size);
 	/* Increment burst size to take into account also bfqq */
 	bfqd->burst_size++;
 
@@ -1143,12 +1143,13 @@ static void bfq_add_to_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 				     burst_list_node)
 		{
                         if(open_bfqq_printk1)
-	                    printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+	                    printk("2:%s %d %s %d bfqq:%llx bfqq->pid:%d bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 			bfq_mark_bfqq_in_large_burst(bfqq_item);
 		}
 		bfq_mark_bfqq_in_large_burst(bfqq);
+
                 if(open_bfqq_printk1){
-	            printk("2:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+	            printk("3:%s %d %s %d bfqq:%llx bfqq->pid:%d bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->pid);
 		    //dump_stack();
 		}
 
@@ -1287,6 +1288,10 @@ static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	 * burst, or finally has just been split, then there is
 	 * nothing else to do.
 	 */
+
+        if(open_bfqq_printk1)
+	    printk("1:%s %s %d bfqq:%llx hlist_unhashed:%d bfq_bfqq_in_large_burst:%d bfqq->split_time:%ld\n",__func__,current->comm,current->pid,(u64)bfqq,hlist_unhashed(&bfqq->burst_list_node),bfq_bfqq_in_large_burst(bfqq),bfqq->split_time);
+
 	if (!hlist_unhashed(&bfqq->burst_list_node) ||
 	    bfq_bfqq_in_large_burst(bfqq) ||
 	    time_is_after_eq_jiffies(bfqq->split_time +
@@ -1315,6 +1320,9 @@ static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	    bfqq->entity.parent != bfqd->burst_parent_entity) {
 		bfqd->large_burst = false;
 		bfq_reset_burst_list(bfqd, bfqq);
+
+                if(open_bfqq_printk1)
+	            printk("2:%s %s %d bfqq:%llx time_is_before_jiffies(bfqd->last_ins_in_burst):%d bfqq->entity.parent != bfqd->burst_parent_entity:%d\n",__func__,current->comm,current->pid,(u64)bfqq,time_is_before_jiffies(bfqd->last_ins_in_burst +bfqd->bfq_burst_interval),bfqq->entity.parent!=bfqd->burst_parent_entity);
 		goto end;
 	}
 
@@ -1326,7 +1334,7 @@ static void bfq_handle_burst(struct bfq_data *bfqd, struct bfq_queue *bfqq)
 	if (bfqd->large_burst) {
 		bfq_mark_bfqq_in_large_burst(bfqq);
                 if(open_bfqq_printk1){
-	            printk("1:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
+	            printk("3:%s %d %s %d bfqq:%llx bfq_mark_bfqq_in_large_burst\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq);
 		    //dump_stack();
 		}
 		goto end;
@@ -1763,10 +1771,10 @@ static void bfq_bfqq_handle_idle_busy_switch(struct bfq_data *bfqd,
             printk("%s %s %d bfqq:%llx bfq_prevent_high_prio_count:%d ************\n",__func__,current->comm,current->pid,(u64)bfqq,bfq_prevent_high_prio_count);
 	}
         //该if成立，说明当前进程最近被判定为high prio io。这样等该进程再进程新的IO传输时，强制令该进程被判定为 high prio io。否则，只能被判断为交互式 io。
-	//bfqq->bfqq_list 是NULL说明该进程是新创建的。否则可能该bfqq过期失效而处于st->idle tree，现在又派发rq，此时该if不成立
-	if((bfqq->wr_coeff == 1) && !list_empty(&bfqq->bfqq_list) && (strncmp(bfqd->last_high_prio_io_process,current->comm,COMM_LEN-1)) == 0){
+	//bfqq->bfqq_list 是NULL说明该进程是新创建的。否则可能该bfqq过期失效而处于st->idle tree，现在又派发rq，此时该if不成立。但实际测试bfqq->bfqq_list一直不是NULL，神奇??????????????
+	if((bfqq->wr_coeff == 1) && /*list_empty(&bfqq->bfqq_list) &&*/ (strncmp(bfqd->last_high_prio_io_process,current->comm,COMM_LEN-1)) == 0){
             bfqq->wr_coeff = 30*BFQ_HIGH_PRIO_IO_WEIGHT_FACTOR;	
-            printk("%s %s %d find  high prio io in history bfqq:0x%llx ************\n",__func__,current->comm,current->pid,(u64)bfqq);
+            printk("%s %s %d find  high prio io in history bfqq:0x%llx list_empty(&bfqq->bfqq_list):%d************\n",__func__,current->comm,current->pid,(u64)bfqq,list_empty(&bfqq->bfqq_list));
 	}
 
         if(open_bfqq_printk)
@@ -3693,6 +3701,8 @@ static bool idling_needed_for_service_guarantees(struct bfq_data *bfqd,
 	if (unlikely(!bfqq_process_refs(bfqq)))
 		return false;
 
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+	    printk("%s %d %s %d bfqq:%llx bfqq->wr_coeff:%d bfqd->wr_busy_queues:%d bfq_tot_busy_queues(bfqd):%d bfqd->rq_in_driver:%d bfqq->dispatched:%d bfq_asymmetric_scenario(bfqd, bfqq):%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqq->wr_coeff,bfqd->wr_busy_queues,bfq_tot_busy_queues(bfqd),bfqd->rq_in_driver,bfqq->dispatched,bfq_asymmetric_scenario(bfqd, bfqq));
 	return (bfqq->wr_coeff > 1 &&
 		(bfqd->wr_busy_queues <
 		 bfq_tot_busy_queues(bfqd) ||
@@ -4379,8 +4389,9 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 	bfqq_sequential_and_IO_bound = !BFQQ_SEEKY(bfqq) &&
 		bfq_bfqq_IO_bound(bfqq) && bfq_bfqq_has_short_ttime(bfqq);
 
-	if(open_bfqq_printk)
-            printk("1:%s %d %s %d bfqq:%llx BFQQ_SEEKY:%d bfq_bfqq_IO_bound:%d bfq_bfqq_has_short_ttime:%d bfqq_sequential_and_IO_bound:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,BFQQ_SEEKY(bfqq),bfq_bfqq_IO_bound(bfqq),bfq_bfqq_has_short_ttime(bfqq),bfqq_sequential_and_IO_bound);
+	//if(open_bfqq_printk)
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+            printk("1:%s %s %d bfqq:%llx BFQQ_SEEKY:%d bfq_bfqq_IO_bound:%d bfq_bfqq_has_short_ttime:%d bfqq_sequential_and_IO_bound:%d\n",__func__,current->comm,current->pid,(u64)bfqq,BFQQ_SEEKY(bfqq),bfq_bfqq_IO_bound(bfqq),bfq_bfqq_has_short_ttime(bfqq),bfqq_sequential_and_IO_bound);
 	/*
 	 * The next variable takes into account the cases where idling
 	 * boosts the throughput.
@@ -4407,8 +4418,9 @@ static bool idling_boosts_thr_without_issues(struct bfq_data *bfqd,
 		((!blk_queue_nonrot(bfqd->queue) || !bfqd->hw_tag) &&
 		 bfqq_sequential_and_IO_bound);
 
-	if(open_bfqq_printk)
-            printk("2:%s %d %s %d bfqq:%llx rot_without_queueing:%d blk_queue_nonrot:%d bfqd->hw_tag:%d idling_boosts_thr:%d bfqd->wr_busy_queues:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,rot_without_queueing,blk_queue_nonrot(bfqd->queue),bfqd->hw_tag,idling_boosts_thr,bfqd->wr_busy_queues);
+	//if(open_bfqq_printk)
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+            printk("2:%s %s %d bfqq:%llx rot_without_queueing:%d blk_queue_nonrot:%d bfqd->hw_tag:%d idling_boosts_thr:%d bfqd->wr_busy_queues:%d\n",__func__,current->comm,current->pid,(u64)bfqq,rot_without_queueing,blk_queue_nonrot(bfqd->queue),bfqd->hw_tag,idling_boosts_thr,bfqd->wr_busy_queues);
 	/*
 	 * The return value of this function is equal to that of
 	 * idling_boosts_thr, unless a special case holds. In this
@@ -4498,8 +4510,9 @@ static bool bfq_better_to_idle(struct bfq_queue *bfqq)
 	idling_needed_for_service_guar =
 		idling_needed_for_service_guarantees(bfqd, bfqq);
 
-	if(open_bfqq_printk)
-	    printk("1:%s %d %s %d bfqq:%llx bfqd->bfq_slice_idle:%d idling_boosts_thr_with_no_issue:%d idling_needed_for_service_guar:%d\n",__func__,__LINE__,current->comm,current->pid,(u64)bfqq,bfqd->bfq_slice_idle,idling_boosts_thr_with_no_issue,idling_needed_for_service_guar);
+	//if(open_bfqq_printk)
+	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
+	    printk("%s %s %d bfqq:%llx bfqd->bfq_slice_idle:%d idling_boosts_thr_with_no_issue:%d idling_needed_for_service_guar:%d\n",__func__,current->comm,current->pid,(u64)bfqq,bfqd->bfq_slice_idle,idling_boosts_thr_with_no_issue,idling_needed_for_service_guar);
 	/*
 	 * We have now the two components we need to compute the
 	 * return value of the function, which is true only if idling
@@ -4678,7 +4691,7 @@ check_queue:
 	 */
 	next_rq = bfqq->next_rq;
 	if(open_bfqq_printk1 && bfqq->pid == vim_pid)
-	    printk("3:%s %s %d bfqq:0x%llx bfqq->next_rq:0x%llx  bfqq->pid:%d entity->budget:%d entity->service:%d bfq_bfqq_wait_request:%d bfq_better_to_idle:%d\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)bfqq->next_rq,bfqq->pid,bfqq->entity.budget,bfqq->entity.service,bfq_bfqq_wait_request(bfqq),bfq_better_to_idle(bfqq));
+	    printk("3:%s %s %d bfqq:0x%llx bfqq->next_rq:0x%llx  bfqq->pid:%d entity->budget:%d entity->service:%d bfq_bfqq_wait_request:%d bfqq->dispatched:%d\n",__func__,current->comm,current->pid,(u64)bfqq,(u64)bfqq->next_rq,bfqq->pid,bfqq->entity.budget,bfqq->entity.service,bfq_bfqq_wait_request(bfqq),bfqq->dispatched/*,bfq_better_to_idle(bfqq)*/);
 	/*
 	 * If bfqq has requests queued and it has enough budget left to
 	 * serve them, keep the queue, otherwise expire it.
@@ -6860,9 +6873,9 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 		     (bfqd->burst_size > 0 ||
 		      bfq_tot_busy_queues(bfqd) == 0)))
 	{
+                if(open_bfqq_printk1)
+	            printk("6:%s %s %d bic:%llx bfqq:%llx bfqd->burst_size:%d bfq_tot_busy_queues:%d\n",__func__,current->comm,current->pid,(u64)bic,(u64)bfqq,bfqd->burst_size,bfq_tot_busy_queues(bfqd));
 		bfq_handle_burst(bfqd, bfqq);
-                if(open_bfqq_printk)
-	            printk("6:%s %d %s %d bic:%llx bfqq:%llx\n",__func__,__LINE__,current->comm,current->pid,(u64)bic,(u64)bfqq);
 	}
 
 	return bfqq;
