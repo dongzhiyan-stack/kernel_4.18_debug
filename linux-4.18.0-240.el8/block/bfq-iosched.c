@@ -5261,7 +5261,6 @@ exit1:
         if(p_process_io_info_tmp && bfqq && bfqq->dispatched > p_process_io_info_tmp->max_bfq_dispatched)
 	    p_process_io_info_tmp->max_bfq_dispatched = bfqq->dispatched;
         
-	//这段代码会导致莫名其妙crash，服了???????????????????
         if( rq && rq->rq_disk && rq->rq_disk->process_io.enable && rq->p_process_rq_stat){
 	    p_process_io_info_tmp = rq->p_process_rq_stat->p_process_io_info;
 	    p_process_io_info_tmp->dispatch_io_count++;
@@ -5605,6 +5604,7 @@ static void bfq_init_bfqq(struct bfq_data *bfqd, struct bfq_queue *bfqq,
 	INIT_HLIST_NODE(&bfqq->burst_list_node);
 	INIT_HLIST_NODE(&bfqq->woken_list_node);
 	INIT_HLIST_HEAD(&bfqq->woken_list);
+	INIT_LIST_HEAD(&bfqq->fifo);
 
 	bfqq->ref = 0;
 	bfqq->bfqd = bfqd;

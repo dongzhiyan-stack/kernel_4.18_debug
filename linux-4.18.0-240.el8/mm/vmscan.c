@@ -62,7 +62,8 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
-
+/**********************************************************************/
+extern int open_shrink_printk;
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -1113,6 +1114,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned nr_unmap_fail = 0;
 
 	cond_resched();
+        if(open_shrink_printk)
+	    printk("1:%s %s %d\n",__func__,current->comm,current->pid);
 
 	while (!list_empty(page_list)) {
 		struct address_space *mapping;
@@ -1125,7 +1128,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
-
+                if(open_shrink_printk)
+		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		if (!trylock_page(page))
 			goto keep;
 
@@ -1138,6 +1142,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 		if (!sc->may_unmap && page_mapped(page))
 			goto keep_locked;
+                if(open_shrink_printk)
+		    printk("3:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 
 		/* Double the slab pressure for mapped and swapcache pages */
 		if ((page_mapped(page) || PageSwapCache(page)) &&
@@ -1214,11 +1220,15 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * memory pressure on the cache working set any longer than it
 		 * takes to write them to disk.
 		 */
+                if(open_shrink_printk)
+		    printk("4:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageWriteback(page));
 		if (PageWriteback(page)) {
 			/* Case 1 above */
 			if (current_is_kswapd() &&
 			    PageReclaim(page) &&
 			    test_bit(PGDAT_WRITEBACK, &pgdat->flags)) {
+                                if(open_shrink_printk)
+   		                    printk("5:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback Case 1\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				nr_immediate++;
 				goto activate_locked;
 
@@ -1236,12 +1246,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				 * then wait_on_page_writeback() to avoid OOM;
 				 * and it's also appropriate in global reclaim.
 				 */
+                                if(open_shrink_printk)
+   		                    printk("6:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback Case 2\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				SetPageReclaim(page);
 				nr_writeback++;
 				goto activate_locked;
 
 			/* Case 3 above */
 			} else {
+                                if(open_shrink_printk)
+   		                    printk("7:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback Case 3\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				unlock_page(page);
 				wait_on_page_writeback(page);
 				/* then go back and try same page again */
@@ -1253,6 +1267,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (!force_reclaim)
 			references = page_check_references(page, sc);
 
+                if(open_shrink_printk)
+   		    printk("8:%s %s %d page:0x%llx page->flags:0x%lx references:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,references);
 		switch (references) {
 		case PAGEREF_ACTIVATE:
 			goto activate_locked;
@@ -1327,6 +1343,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
+                if(open_shrink_printk)
+   		    printk("9:%s %s %d page:0x%llx page->flags:0x%lx PageDirty;%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageDirty(page));
 		if (PageDirty(page)) {
 			/*
 			 * Only kswapd can writeback filesystem pages
@@ -1347,6 +1365,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				 * except we already have the page isolated
 				 * and know it's dirty
 				 */
+                                if(open_shrink_printk)
+   		                    printk("10:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				inc_node_page_state(page, NR_VMSCAN_IMMEDIATE);
 				SetPageReclaim(page);
 
@@ -1360,6 +1380,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			if (!sc->may_writepage)
 				goto keep_locked;
 
+                        if(open_shrink_printk)
+   		        printk("11:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->pageout\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			/*
 			 * Page is dirty. Flush the TLB if a writable entry
 			 * potentially exists to avoid CPU writes after IO
@@ -1368,10 +1390,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			try_to_unmap_flush_dirty();
 			switch (pageout(page, mapping, sc)) {
 			case PAGE_KEEP:
+                                if(open_shrink_printk)
+   		                    printk("12:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->keep_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				goto keep_locked;
 			case PAGE_ACTIVATE:
+                                if(open_shrink_printk)
+   		                    printk("13:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				goto activate_locked;
 			case PAGE_SUCCESS:
+                                if(open_shrink_printk)
+   		                    printk("14:%s %s %d page:0x%llx page->flags:0x%lx PageDirty PageWriteback:%d PageDirty:%d PG_locked:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageWriteback(page),PageDirty(page),PageLocked(page));
 				if (PageWriteback(page))
 					goto keep;
 				if (PageDirty(page))
@@ -1386,7 +1414,11 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				if (PageDirty(page) || PageWriteback(page))
 					goto keep_locked;
 				mapping = page_mapping(page);
+                                if(open_shrink_printk)
+   		                    printk("15:%s %s %d page:0x%llx page->flags:0x%lx \n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			case PAGE_CLEAN:
+                                if(open_shrink_printk)
+   		                    printk("16:%s %s %d page:0x%llx page->flags:0x%lx PageDirty PAGE_CLEAN\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				; /* try to free the page below */
 			}
 		}
@@ -1413,6 +1445,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * Otherwise, leave the page on the LRU so it is swappable.
 		 */
 		if (page_has_private(page)) {
+                        if(open_shrink_printk)
+   		            printk("17:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			if (!try_to_release_page(page, sc->gfp_mask))
 				goto activate_locked;
 			if (!mapping && page_count(page) == 1) {
@@ -1431,6 +1465,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 					continue;
 				}
 			}
+                        if(open_shrink_printk)
+   		            printk("18:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		}
 
 		if (PageAnon(page) && !PageSwapBacked(page)) {
@@ -1448,8 +1484,12 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			goto keep_locked;
 
 		unlock_page(page);
+                if(open_shrink_printk)
+   		    printk("19:%s %s %d page:0x%llx page->flags:0x%lx unlock_page(page)\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 free_it:
 		nr_reclaimed++;
+                if(open_shrink_printk)
+   		    printk("20:%s %s %d page:0x%llx page->flags:0x%lx free_it nr_reclaimed++\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 
 		/*
 		 * Is there need to periodically free_page_list? It would
@@ -1463,6 +1503,8 @@ free_it:
 		continue;
 
 activate_locked:
+                if(open_shrink_printk)
+   		    printk("21:%s %s %d page:0x%llx page->flags:0x%lx activate_locked:\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		/* Not a candidate for swapping, so reclaim swap space. */
 		if (PageSwapCache(page) && (mem_cgroup_swap_full(page) ||
 						PageMlocked(page)))
@@ -1474,8 +1516,12 @@ activate_locked:
 			count_memcg_page_event(page, PGACTIVATE);
 		}
 keep_locked:
+                if(open_shrink_printk)
+   		    printk("22:%s %s %d page:0x%llx page->flags:0x%lx keep_locked:\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		unlock_page(page);
 keep:
+                if(open_shrink_printk)
+   		    printk("23:%s %s %d page:0x%llx page->flags:0x%lx keep:\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		list_add(&page->lru, &ret_pages);
 		VM_BUG_ON_PAGE(PageLRU(page) || PageUnevictable(page), page);
 	}
@@ -1668,6 +1714,9 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		page = lru_to_page(src);
 		prefetchw_prev_lru_page(page, src, flags);
 
+                if(open_shrink_printk)
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+
 		VM_BUG_ON_PAGE(!PageLRU(page), page);
 
 		if (page_zonenum(page) > sc->reclaim_idx) {
@@ -1685,6 +1734,8 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		scan++;
 		switch (__isolate_lru_page(page, mode)) {
 		case 0:
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			nr_pages = hpage_nr_pages(page);
 			nr_taken += nr_pages;
 			nr_zone_taken[page_zonenum(page)] += nr_pages;
@@ -1829,6 +1880,8 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 		struct page *page = lru_to_page(page_list);
 		int lru;
 
+                if(open_shrink_printk)
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		VM_BUG_ON_PAGE(PageLRU(page), page);
 		list_del(&page->lru);
 		if (unlikely(!page_evictable(page))) {
@@ -1902,6 +1955,8 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	struct zone_reclaim_stat *reclaim_stat = &lruvec->reclaim_stat;
 	bool stalled = false;
 
+        if(open_shrink_printk)
+	    printk("1:%s %s %d nr_to_scan:%ld lru:%d lruvec:0x%llx isolate_mode:0x%x\n",__func__,current->comm,current->pid,nr_to_scan,lru,(u64)lruvec,isolate_mode);
 	while (unlikely(too_many_isolated(pgdat, file, sc))) {
 		if (stalled)
 			return 0;
@@ -1960,7 +2015,8 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 		count_memcg_events(lruvec_memcg(lruvec), PGSTEAL_DIRECT,
 				   nr_reclaimed);
 	}
-
+        if(open_shrink_printk)
+	    printk("2:%s %s %d ->putback_inactive_pages()\n",__func__,current->comm,current->pid);
 	putback_inactive_pages(lruvec, &page_list);
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
@@ -1992,7 +2048,9 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	sc->nr.taken += nr_taken;
 	if (file)
 		sc->nr.file_taken += nr_taken;
-
+        
+	if(open_shrink_printk)
+	    printk("3:%s %s %d sc->nr.dirty:%d sc->nr.congested:%d sc->nr.unqueued_dirty:%d sc->nr.writeback:%d sc->nr.immediate:%d sc->nr.taken:%d\n",__func__,current->comm,current->pid,sc->nr.dirty,sc->nr.congested,sc->nr.unqueued_dirty,sc->nr.writeback,sc->nr.immediate,sc->nr.taken);
 	trace_mm_vmscan_lru_shrink_inactive(pgdat->node_id,
 			nr_scanned, nr_reclaimed, &stat, sc->priority, file);
 	return nr_reclaimed;
@@ -2030,6 +2088,8 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 
 	while (!list_empty(list)) {
 		page = lru_to_page(list);
+                if(open_shrink_printk)
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 
 		VM_BUG_ON_PAGE(PageLRU(page), page);
@@ -2089,6 +2149,8 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	if (!sc->may_unmap)
 		isolate_mode |= ISOLATE_UNMAPPED;
 
+        if(open_shrink_printk)
+		printk("1:%s %s %d nr_to_scan:%ld\n",__func__,current->comm,current->pid,nr_to_scan);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
@@ -2141,6 +2203,8 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		ClearPageActive(page);	/* we are de-activating */
 		SetPageWorkingset(page);
 		list_add(&page->lru, &l_inactive);
+                if(open_shrink_printk)
+		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 	}
 
 	/*
@@ -2521,6 +2585,8 @@ out:
 
 		*lru_pages += lruvec_size;
 		nr[lru] = scan;
+		if(open_shrink_printk)
+		    printk("%s %s %d nr[%d]:%ld\n",__func__,current->comm,current->pid,lru,nr[lru]);
 	}
 }
 
@@ -2742,6 +2808,8 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 			unsigned long reclaimed;
 			unsigned long scanned;
 
+                        if(open_shrink_printk)
+    		            printk("1:%s %s %d memcg:0x%llx root:0x%llx sc->nr_reclaimed:%ld sc->nr_scanned:%ld\n",__func__,current->comm,current->pid,(u64)memcg,(u64)root,sc->nr_reclaimed,sc->nr_scanned);
 			switch (mem_cgroup_protected(root, memcg)) {
 			case MEMCG_PROT_MIN:
 				/*
@@ -2931,6 +2999,8 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 	 * allowed level, force direct reclaim to scan the highmem zone as
 	 * highmem pages could be pinning lowmem pages storing buffer_heads
 	 */
+        if(open_shrink_printk)
+            printk("1:%s %s %d\n",__func__,current->comm,current->pid);
 	orig_mask = sc->gfp_mask;
 	if (buffer_heads_over_limit) {
 		sc->gfp_mask |= __GFP_HIGHMEM;
@@ -2964,6 +3034,8 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 				continue;
 			}
 
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d zone:0x%llx %s\n",__func__,current->comm,current->pid,(u64)zone,zone->name);
 			/*
 			 * Shrink each node in the zonelist once. If the
 			 * zonelist is ordered by zone (not the default) then a
