@@ -39,7 +39,8 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/pagemap.h>
-
+/******************************************************************/
+extern int async_shrink_enable;
 /* How many pages do we try to swap or page in/out together? */
 int page_cluster;
 
@@ -62,12 +63,14 @@ static void __page_cache_release(struct page *page)
 		struct lruvec *lruvec;
 		unsigned long flags;
 
+		atomic_inc(&zone->zone_pgdat->shrink_spin_lock_count);
 		spin_lock_irqsave(zone_lru_lock(zone), flags);
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		VM_BUG_ON_PAGE(!PageLRU(page), page);
 		__ClearPageLRU(page);
 		del_page_from_lru_list(page, lruvec, page_off_lru(page));
 		spin_unlock_irqrestore(zone_lru_lock(zone), flags);
+		atomic_dec(&zone->zone_pgdat->shrink_spin_lock_count);
 	}
 	__ClearPageWaiters(page);
 	mem_cgroup_uncharge(page);
@@ -199,17 +202,22 @@ static void pagevec_lru_move_fn(struct pagevec *pvec,
 		struct pglist_data *pagepgdat = page_pgdat(page);
 
 		if (pagepgdat != pgdat) {
-			if (pgdat)
+			if (pgdat){
 				spin_unlock_irqrestore(&pgdat->lru_lock, flags);
+				atomic_dec(&pgdat->shrink_spin_lock_count);
+			}
 			pgdat = pagepgdat;
+			atomic_inc(&pgdat->shrink_spin_lock_count);
 			spin_lock_irqsave(&pgdat->lru_lock, flags);
 		}
 
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 		(*move_fn)(page, lruvec, arg);
 	}
-	if (pgdat)
+	if (pgdat){
 		spin_unlock_irqrestore(&pgdat->lru_lock, flags);
+		atomic_dec(&pgdat->shrink_spin_lock_count);
+	}
 	release_pages(pvec->pages, pvec->nr);
 	pagevec_reinit(pvec);
 }
@@ -330,9 +338,11 @@ void activate_page(struct page *page)
 	struct zone *zone = page_zone(page);
 
 	page = compound_head(page);
+	atomic_inc(&zone->zone_pgdat->shrink_spin_lock_count);
 	spin_lock_irq(zone_lru_lock(zone));
 	__activate_page(page, mem_cgroup_page_lruvec(page, zone->zone_pgdat), NULL);
 	spin_unlock_irq(zone_lru_lock(zone));
+	atomic_dec(&zone->zone_pgdat->shrink_spin_lock_count);
 }
 #endif
 
@@ -395,8 +405,17 @@ void mark_page_accessed(struct page *page)
 	} else if (!PageReferenced(page)) {
 		SetPageReferenced(page);
 	}
-	if (page_is_idle(page))
+	if(async_shrink_enable && !PageCompound(page) && !page_mapped(page) && page_is_file_cache(page)){
+	    if (PageIdle(page))
 		clear_page_idle(page);
+	    else if(!PageIdle(page) && !PageYoung(page)){
+	        set_page_young(page);
+	    }
+	}
+	else{
+	    if (page_is_idle(page))
+		clear_page_idle(page);
+	}
 }
 EXPORT_SYMBOL(mark_page_accessed);
 
@@ -730,6 +749,7 @@ void release_pages(struct page **pages, int nr)
 		 */
 		if (locked_pgdat && ++lock_batch == SWAP_CLUSTER_MAX) {
 			spin_unlock_irqrestore(&locked_pgdat->lru_lock, flags);
+			atomic_dec(&locked_pgdat->shrink_spin_lock_count);
 			locked_pgdat = NULL;
 		}
 
@@ -740,6 +760,7 @@ void release_pages(struct page **pages, int nr)
 			if (locked_pgdat) {
 				spin_unlock_irqrestore(&locked_pgdat->lru_lock,
 						       flags);
+			        atomic_dec(&locked_pgdat->shrink_spin_lock_count);
 				locked_pgdat = NULL;
 			}
 			/*
@@ -761,6 +782,7 @@ void release_pages(struct page **pages, int nr)
 		if (PageCompound(page)) {
 			if (locked_pgdat) {
 				spin_unlock_irqrestore(&locked_pgdat->lru_lock, flags);
+			        atomic_dec(&locked_pgdat->shrink_spin_lock_count);
 				locked_pgdat = NULL;
 			}
 			__put_compound_page(page);
@@ -771,11 +793,14 @@ void release_pages(struct page **pages, int nr)
 			struct pglist_data *pgdat = page_pgdat(page);
 
 			if (pgdat != locked_pgdat) {
-				if (locked_pgdat)
+				if (locked_pgdat){
 					spin_unlock_irqrestore(&locked_pgdat->lru_lock,
 									flags);
+			                atomic_dec(&locked_pgdat->shrink_spin_lock_count);
+				}
 				lock_batch = 0;
 				locked_pgdat = pgdat;
+				atomic_inc(&locked_pgdat->shrink_spin_lock_count);
 				spin_lock_irqsave(&locked_pgdat->lru_lock, flags);
 			}
 
@@ -791,9 +816,10 @@ void release_pages(struct page **pages, int nr)
 
 		list_add(&page->lru, &pages_to_free);
 	}
-	if (locked_pgdat)
+	if (locked_pgdat){
 		spin_unlock_irqrestore(&locked_pgdat->lru_lock, flags);
-
+		atomic_dec(&locked_pgdat->shrink_spin_lock_count);
+        }
 	mem_cgroup_uncharge_list(&pages_to_free);
 	free_unref_page_list(&pages_to_free);
 }

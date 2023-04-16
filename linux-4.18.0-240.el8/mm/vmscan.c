@@ -64,6 +64,10 @@
 #include <trace/events/vmscan.h>
 /**********************************************************************/
 extern int open_shrink_printk;
+int async_shrink_enable = 0;
+static int async_shrink_memory(void *p);
+void inline update_async_shrink_page(struct page *page);
+
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -1020,12 +1024,18 @@ static enum page_references page_check_references(struct page *page,
 	 * Mlock lost the isolation race with us.  Let try_to_unmap()
 	 * move the page to the unevictable list.
 	 */
-	if (vm_flags & VM_LOCKED)
+	if (vm_flags & VM_LOCKED){
+                if(open_shrink_printk)
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d vm_flags & VM_LOCKED :PAGEREF_RECLAIM\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 		return PAGEREF_RECLAIM;
+	}
 
 	if (referenced_ptes) {
-		if (PageSwapBacked(page))
+		if (PageSwapBacked(page)){
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d PageSwapBacked:PAGEREF_ACTIVATE\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 			return PAGEREF_ACTIVATE;
+		}
 		/*
 		 * All mapped pages start out with page table
 		 * references from the instantiating fault, so we need
@@ -1042,22 +1052,34 @@ static enum page_references page_check_references(struct page *page,
 		 */
 		SetPageReferenced(page);
 
-		if (referenced_page || referenced_ptes > 1)
+		if (referenced_page || referenced_ptes > 1){
+                        if(open_shrink_printk)
+		            printk("3:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d PAGEREF_ACTIVATE\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 			return PAGEREF_ACTIVATE;
+		}
 
 		/*
 		 * Activate file-backed executable pages after first usage.
 		 */
-		if (vm_flags & VM_EXEC)
+		if (vm_flags & VM_EXEC){
+                        if(open_shrink_printk)
+		            printk("4:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d vm_flags & VM_EXEC:PAGEREF_ACTIVATE\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 			return PAGEREF_ACTIVATE;
-
+                }
+                if(open_shrink_printk)
+		       printk("6:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d PAGEREF_KEEP\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 		return PAGEREF_KEEP;
 	}
 
 	/* Reclaim if clean, defer dirty pages to writeback */
-	if (referenced_page && !PageSwapBacked(page))
+	if (referenced_page && !PageSwapBacked(page)){
+                if(open_shrink_printk)
+		    printk("7:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d PAGEREF_RECLAIM_CLEAN\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 		return PAGEREF_RECLAIM_CLEAN;
-
+        }
+        
+	if(open_shrink_printk)
+            printk("8:%s %s %d page:0x%llx page->flags:0x%lx referenced_ptes:%d referenced_page:%d PAGEREF_RECLAIM\n",__func__,current->comm,current->pid,(u64)page,page->flags,referenced_ptes,referenced_page);
 	return PAGEREF_RECLAIM;
 }
 
@@ -1129,10 +1151,12 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
                 if(open_shrink_printk)
-		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
-		if (!trylock_page(page))
+		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx page_evictable:%d page_mapped:%d PageWriteback:%d PageDirty:%d PageLocked:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,page_evictable(page),page_mapped(page),PageWriteback(page),PageDirty(page),PageLocked(page));
+		if (!trylock_page(page)){
+                        if(open_shrink_printk)
+		            printk("2_1:%s %s %d page:0x%llx page->flags:0x%lx trylock_page\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			goto keep;
-
+                }
 		VM_BUG_ON_PAGE(PageActive(page), page);
 
 		sc->nr_scanned++;
@@ -1140,11 +1164,11 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (unlikely(!page_evictable(page)))
 			goto activate_locked;
 
-		if (!sc->may_unmap && page_mapped(page))
+		if (!sc->may_unmap && page_mapped(page)){
+                        if(open_shrink_printk)
+		            printk("3:%s %s %d page:0x%llx page->flags:0x%lx trylock_page\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			goto keep_locked;
-                if(open_shrink_printk)
-		    printk("3:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
-
+                }
 		/* Double the slab pressure for mapped and swapcache pages */
 		if ((page_mapped(page) || PageSwapCache(page)) &&
 		    !(PageAnon(page) && !PageSwapBacked(page)))
@@ -1220,15 +1244,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * memory pressure on the cache working set any longer than it
 		 * takes to write them to disk.
 		 */
-                if(open_shrink_printk)
-		    printk("4:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageWriteback(page));
 		if (PageWriteback(page)) {
+                        if(open_shrink_printk)
+		            printk("4:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageWriteback(page));
 			/* Case 1 above */
 			if (current_is_kswapd() &&
 			    PageReclaim(page) &&
 			    test_bit(PGDAT_WRITEBACK, &pgdat->flags)) {
                                 if(open_shrink_printk)
    		                    printk("5:%s %s %d page:0x%llx page->flags:0x%lx PageWriteback Case 1\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+
 				nr_immediate++;
 				goto activate_locked;
 
@@ -1267,8 +1292,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (!force_reclaim)
 			references = page_check_references(page, sc);
 
-                if(open_shrink_printk)
-   		    printk("8:%s %s %d page:0x%llx page->flags:0x%lx references:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,references);
+                //if(open_shrink_printk)
+   		//    printk("8:%s %s %d page:0x%llx page->flags:0x%lx references:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,references);
 		switch (references) {
 		case PAGEREF_ACTIVATE:
 			goto activate_locked;
@@ -1334,6 +1359,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 */
 		if (page_mapped(page)) {
 			enum ttu_flags flags = ttu_flags | TTU_BATCH_FLUSH;
+                        if(open_shrink_printk)
+   		        printk("8_1:%s %s %d page:0x%llx page->flags:0x%lx page_mapped\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 
 			if (unlikely(PageTransHuge(page)))
 				flags |= TTU_SPLIT_HUGE_PMD;
@@ -1343,9 +1370,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
-                if(open_shrink_printk)
-   		    printk("9:%s %s %d page:0x%llx page->flags:0x%lx PageDirty;%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageDirty(page));
 		if (PageDirty(page)) {
+                         if(open_shrink_printk)
+   		             printk("9:%s %s %d page:0x%llx page->flags:0x%lx PageDirty;%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageDirty(page));
 			/*
 			 * Only kswapd can writeback filesystem pages
 			 * to avoid risk of stack overflow. But avoid
@@ -1381,7 +1408,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				goto keep_locked;
 
                         if(open_shrink_printk)
-   		        printk("11:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->pageout\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+   		            printk("11:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->pageout\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			/*
 			 * Page is dirty. Flush the TLB if a writable entry
 			 * potentially exists to avoid CPU writes after IO
@@ -1446,14 +1473,23 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 */
 		if (page_has_private(page)) {
                         if(open_shrink_printk)
-   		            printk("17:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
-			if (!try_to_release_page(page, sc->gfp_mask))
+   		            printk("17:%s %s %d page:0x%llx page->flags:0x%lx mapping:0x%llx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags,(u64)mapping);
+
+			if (!try_to_release_page(page, sc->gfp_mask)){
+                                if(open_shrink_printk)
+   		                    printk("18:%s %s %d page:0x%llx page->flags:0x%lx activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 				goto activate_locked;
+			}
 			if (!mapping && page_count(page) == 1) {
 				unlock_page(page);
-				if (put_page_testzero(page))
+				if (put_page_testzero(page)){
+                                        if(open_shrink_printk)
+   		                            printk("18_1:%s %s %d page:0x%llx page->flags:0x%lx put_page_testzero\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 					goto free_it;
+				}
 				else {
+                                        if(open_shrink_printk)
+   		                            printk("18_2:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 					/*
 					 * rare race with speculative reference.
 					 * the speculative reference will free
@@ -1465,8 +1501,6 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 					continue;
 				}
 			}
-                        if(open_shrink_printk)
-   		            printk("18:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 		}
 
 		if (PageAnon(page) && !PageSwapBacked(page)) {
@@ -1480,12 +1514,12 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 			count_vm_event(PGLAZYFREED);
 			count_memcg_page_event(page, PGLAZYFREED);
-		} else if (!mapping || !__remove_mapping(mapping, page, true))
+		} else if (!mapping || !__remove_mapping(mapping, page, true)){
+                        if(open_shrink_printk)
+   		            printk("19:%s %s %d page:0x%llx page->flags:0x%lx mapping:0x%llx keep_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags,(u64)mapping);
 			goto keep_locked;
-
+                }
 		unlock_page(page);
-                if(open_shrink_printk)
-   		    printk("19:%s %s %d page:0x%llx page->flags:0x%lx unlock_page(page)\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 free_it:
 		nr_reclaimed++;
                 if(open_shrink_printk)
@@ -1715,11 +1749,13 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		prefetchw_prev_lru_page(page, src, flags);
 
                 if(open_shrink_printk)
-		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx page_zonenum(page):%d sc->reclaim_idx:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,page_zonenum(page),sc->reclaim_idx);
 
 		VM_BUG_ON_PAGE(!PageLRU(page), page);
 
 		if (page_zonenum(page) > sc->reclaim_idx) {
+			//如果page要从file lru链表剔除，并且page是async_shrink_page，则要从file lru链表取出page的上一个page更新到async_shrink_page
+			update_async_shrink_page(page);
 			list_move(&page->lru, &pages_skipped);
 			nr_skipped[page_zonenum(page)]++;
 			continue;
@@ -1734,15 +1770,19 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		scan++;
 		switch (__isolate_lru_page(page, mode)) {
 		case 0:
-                        if(open_shrink_printk)
-		            printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 			nr_pages = hpage_nr_pages(page);
 			nr_taken += nr_pages;
 			nr_zone_taken[page_zonenum(page)] += nr_pages;
+			//如果page要从file lru链表剔除，并且page是async_shrink_page，则要从file lru链表取出page的上一个page更新到async_shrink_page
+			update_async_shrink_page(page);
 			list_move(&page->lru, dst);
 			break;
 
 		case -EBUSY:
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d page:0x%llx page->flags:0x%lx EBUSY\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			//如果page要从file lru链表剔除，并且page是async_shrink_page，则要从file lru链表取出page的上一个page更新到async_shrink_page
+			update_async_shrink_page(page);
 			/* else it is being freed elsewhere */
 			list_move(&page->lru, src);
 			continue;
@@ -1762,6 +1802,8 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 	if (!list_empty(&pages_skipped)) {
 		int zid;
 
+                if(open_shrink_printk)
+		    printk("3:%s %s %d\n",__func__,current->comm,current->pid);
 		list_splice(&pages_skipped, src);
 		for (zid = 0; zid < MAX_NR_ZONES; zid++) {
 			if (!nr_skipped[zid])
@@ -1886,7 +1928,9 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 		list_del(&page->lru);
 		if (unlikely(!page_evictable(page))) {
 			spin_unlock_irq(&pgdat->lru_lock);
+			atomic_inc(&pgdat->shrink_spin_lock_count);
 			putback_lru_page(page);
+			atomic_inc(&pgdat->shrink_spin_lock_count);
 			spin_lock_irq(&pgdat->lru_lock);
 			continue;
 		}
@@ -1903,14 +1947,18 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 			reclaim_stat->recent_rotated[file] += numpages;
 		}
 		if (put_page_testzero(page)) {
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d put_page_testzero page:0x%llx page->flags:0x%lx PageCompound:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageCompound(page));
 			__ClearPageLRU(page);
 			__ClearPageActive(page);
 			del_page_from_lru_list(page, lruvec, lru);
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
+				atomic_dec(&pgdat->shrink_spin_lock_count);
 				mem_cgroup_uncharge(page);
 				(*get_compound_page_dtor(page))(page);
+			        atomic_inc(&pgdat->shrink_spin_lock_count);
 				spin_lock_irq(&pgdat->lru_lock);
 			} else
 				list_add(&page->lru, &pages_to_free);
@@ -1975,6 +2023,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	if (!sc->may_unmap)
 		isolate_mode |= ISOLATE_UNMAPPED;
 
+	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &page_list,
@@ -1995,6 +2044,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 				   nr_scanned);
 	}
 	spin_unlock_irq(&pgdat->lru_lock);
+	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	if (nr_taken == 0)
 		return 0;
@@ -2002,6 +2052,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	nr_reclaimed = shrink_page_list(&page_list, pgdat, sc, 0,
 				&stat, false);
 
+        atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	if (current_is_kswapd()) {
@@ -2016,12 +2067,13 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 				   nr_reclaimed);
 	}
         if(open_shrink_printk)
-	    printk("2:%s %s %d ->putback_inactive_pages()\n",__func__,current->comm,current->pid);
+	    printk("2:%s %s %d nr_reclaimed:%ld ->putback_inactive_pages()\n",__func__,current->comm,current->pid,nr_reclaimed);
 	putback_inactive_pages(lruvec, &page_list);
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&pgdat->lru_lock);
+	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	mem_cgroup_uncharge_list(&page_list);
 	free_unref_page_list(&page_list);
@@ -2089,7 +2141,7 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 	while (!list_empty(list)) {
 		page = lru_to_page(list);
                 if(open_shrink_printk)
-		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+		    printk("1:%s %s %d lru:%d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,lru,(u64)page,page->flags);
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 
 		VM_BUG_ON_PAGE(PageLRU(page), page);
@@ -2100,14 +2152,18 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 		list_move(&page->lru, &lruvec->lists[lru]);
 
 		if (put_page_testzero(page)) {
+                        if(open_shrink_printk)
+		            printk("2:%s %s %d put_page_testzero page:0x%llx page->flags:0x%lx PageCompound:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageCompound(page));
 			__ClearPageLRU(page);
 			__ClearPageActive(page);
 			del_page_from_lru_list(page, lruvec, lru);
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
+				atomic_dec(&pgdat->shrink_spin_lock_count);
 				mem_cgroup_uncharge(page);
 				(*get_compound_page_dtor(page))(page);
+			        atomic_inc(&pgdat->shrink_spin_lock_count);
 				spin_lock_irq(&pgdat->lru_lock);
 			} else
 				list_add(&page->lru, pages_to_free);
@@ -2150,7 +2206,8 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		isolate_mode |= ISOLATE_UNMAPPED;
 
         if(open_shrink_printk)
-		printk("1:%s %s %d nr_to_scan:%ld\n",__func__,current->comm,current->pid,nr_to_scan);
+		printk("1:%s %s %d nr_to_scan:%ld isolate_mode:%d\n",__func__,current->comm,current->pid,nr_to_scan,isolate_mode);
+	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
@@ -2163,6 +2220,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	count_memcg_events(lruvec_memcg(lruvec), PGREFILL, nr_scanned);
 
 	spin_unlock_irq(&pgdat->lru_lock);
+	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	while (!list_empty(&l_hold)) {
 		cond_resched();
@@ -2203,10 +2261,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		ClearPageActive(page);	/* we are de-activating */
 		SetPageWorkingset(page);
 		list_add(&page->lru, &l_inactive);
-                if(open_shrink_printk)
-		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,(u64)page,page->flags);
 	}
 
+	atomic_inc(&pgdat->shrink_spin_lock_count);
 	/*
 	 * Move pages back to the lru list.
 	 */
@@ -2219,10 +2276,13 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	 */
 	reclaim_stat->recent_rotated[file] += nr_rotated;
 
+        if(open_shrink_printk)
+		printk("2:%s %s %d ->move_active_pages_to_lru()\n",__func__,current->comm,current->pid);
 	nr_activate = move_active_pages_to_lru(lruvec, &l_active, &l_hold, lru);
 	nr_deactivate = move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	spin_unlock_irq(&pgdat->lru_lock);
+	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	mem_cgroup_uncharge_list(&l_hold);
 	free_unref_page_list(&l_hold);
@@ -2301,6 +2361,8 @@ static bool inactive_list_is_low(struct lruvec *lruvec, bool file,
 			lruvec_lru_size(lruvec, active_lru, MAX_NR_ZONES), active,
 			inactive_ratio, file);
 
+	if(open_shrink_printk)
+	    printk("1:%s %s %d inactive:%ld inactive_ratio:%ld active:%ld\n",__func__,current->comm,current->pid,inactive,inactive_ratio,active);
 	return inactive * inactive_ratio < active;
 }
 
@@ -2349,6 +2411,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 
 	/* If we have no swap space, do not bother scanning anon pages. */
 	if (!sc->may_swap || mem_cgroup_get_nr_swap_pages(memcg) <= 0) {
+		if(open_shrink_printk)
+		    printk("1:%s %s %d sc->may_swap:%d\n",__func__,current->comm,current->pid,sc->may_swap);
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -2361,6 +2425,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	 * too expensive.
 	 */
 	if (!global_reclaim(sc) && !swappiness) {
+		if(open_shrink_printk)
+		    printk("2:%s %s %d\n",__func__,current->comm,current->pid);
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -2371,6 +2437,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	 * (unless the swappiness setting disagrees with swapping).
 	 */
 	if (!sc->priority && swappiness) {
+		if(open_shrink_printk)
+		    printk("3:%s %s %d\n",__func__,current->comm,current->pid);
 		scan_balance = SCAN_EQUAL;
 		goto out;
 	}
@@ -2390,6 +2458,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 		int z;
 		unsigned long total_high_wmark = 0;
 
+		if(open_shrink_printk)
+		    printk("4:%s %s %d\n",__func__,current->comm,current->pid);
 		pgdatfree = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);
 		pgdatfile = node_page_state(pgdat, NR_ACTIVE_FILE) +
 			   node_page_state(pgdat, NR_INACTIVE_FILE);
@@ -2458,6 +2528,7 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	file  = lruvec_lru_size(lruvec, LRU_ACTIVE_FILE, MAX_NR_ZONES) +
 		lruvec_lru_size(lruvec, LRU_INACTIVE_FILE, MAX_NR_ZONES);
 
+	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 	if (unlikely(reclaim_stat->recent_scanned[0] > anon / 4)) {
 		reclaim_stat->recent_scanned[0] /= 2;
@@ -2480,10 +2551,13 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	fp = file_prio * (reclaim_stat->recent_scanned[1] + 1);
 	fp /= reclaim_stat->recent_rotated[1] + 1;
 	spin_unlock_irq(&pgdat->lru_lock);
+	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	fraction[0] = ap;
 	fraction[1] = fp;
 	denominator = ap + fp + 1;
+	if(open_shrink_printk)
+	    printk("5:%s %s %d ap:%ld fp:%ld\n",__func__,current->comm,current->pid,ap,fp);
 out:
 	*lru_pages = 0;
 	for_each_evictable_lru(lru) {
@@ -2586,7 +2660,7 @@ out:
 		*lru_pages += lruvec_size;
 		nr[lru] = scan;
 		if(open_shrink_printk)
-		    printk("%s %s %d nr[%d]:%ld\n",__func__,current->comm,current->pid,lru,nr[lru]);
+		    printk("6:%s %s %d nr[%d]:%ld scan:%ld sc->priority:%d lruvec_size:%ld scan_balance:%d protection:%ld\n",__func__,current->comm,current->pid,lru,nr[lru],scan,sc->priority,lruvec_size,scan_balance,protection);
 	}
 }
 
@@ -2605,6 +2679,9 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	unsigned long nr_to_reclaim = sc->nr_to_reclaim;
 	struct blk_plug plug;
 	bool scan_adjusted;
+		
+	if(open_shrink_printk)
+	    printk("1:%s %s %d\n",__func__,current->comm,current->pid);
 
 	get_scan_count(lruvec, memcg, sc, nr, lru_pages);
 
@@ -2635,6 +2712,8 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 			if (nr[lru]) {
 				nr_to_scan = min(nr[lru], SWAP_CLUSTER_MAX);
 				nr[lru] -= nr_to_scan;
+	                        if(open_shrink_printk)
+	                            printk("2:%s %s %d nr_to_scan:%ld lru:%d scan_adjusted:%d lruvec:0x%llx ->shrink_list()\n",__func__,current->comm,current->pid,nr_to_scan,lru,scan_adjusted,(u64)lruvec);
 
 				nr_reclaimed += shrink_list(lru, nr_to_scan,
 							    lruvec, sc);
@@ -2704,9 +2783,12 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	 * Even if we did not try to evict anon pages at all, we want to
 	 * rebalance the anon lru active/inactive ratio.
 	 */
-	if (inactive_list_is_low(lruvec, false, sc, true))
+	if (inactive_list_is_low(lruvec, false, sc, true)){
+	        if(open_shrink_printk)
+	            printk("3:%s %s %d ->shrink_active_list\n",__func__,current->comm,current->pid);
 		shrink_active_list(SWAP_CLUSTER_MAX, lruvec,
 				   sc, LRU_ACTIVE_ANON);
+	}
 }
 
 /* Use reclaim/compaction for costly allocs or under memory pressure */
@@ -2999,8 +3081,10 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 	 * allowed level, force direct reclaim to scan the highmem zone as
 	 * highmem pages could be pinning lowmem pages storing buffer_heads
 	 */
-        if(open_shrink_printk)
+        if(open_shrink_printk){
             printk("1:%s %s %d\n",__func__,current->comm,current->pid);
+	    dump_stack();
+	}
 	orig_mask = sc->gfp_mask;
 	if (buffer_heads_over_limit) {
 		sc->gfp_mask |= __GFP_HIGHMEM;
@@ -4021,6 +4105,13 @@ int kswapd_run(int nid)
 		ret = PTR_ERR(pgdat->kswapd);
 		pgdat->kswapd = NULL;
 	}
+
+	pgdat->async_shrink_thread = kthread_run(async_shrink_memory,pgdat, "async_shrink_thread%d",nid);
+	if(IS_ERR(pgdat->async_shrink_thread)){
+		pr_err("Failed to start async_shrink_thread on node %d\n", nid);
+		ret = PTR_ERR(pgdat->async_shrink_thread);
+		pgdat->async_shrink_thread = NULL;
+	}
 	return ret;
 }
 
@@ -4048,6 +4139,7 @@ static int __init kswapd_init(void)
 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
 					"mm/vmscan:online", kswapd_cpu_online,
 					NULL);
+
 	WARN_ON(ret < 0);
 	return 0;
 }
@@ -4271,9 +4363,12 @@ void check_move_unevictable_pages(struct pagevec *pvec)
 
 		pgscanned++;
 		if (pagepgdat != pgdat) {
-			if (pgdat)
+			if (pgdat){
 				spin_unlock_irq(&pgdat->lru_lock);
+				atomic_dec(&pgdat->shrink_spin_lock_count);
+			}
 			pgdat = pagepgdat;
+			atomic_inc(&pgdat->shrink_spin_lock_count);
 			spin_lock_irq(&pgdat->lru_lock);
 		}
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
@@ -4296,6 +4391,302 @@ void check_move_unevictable_pages(struct pagevec *pvec)
 		__count_vm_events(UNEVICTABLE_PGRESCUED, pgrescued);
 		__count_vm_events(UNEVICTABLE_PGSCANNED, pgscanned);
 		spin_unlock_irq(&pgdat->lru_lock);
+		atomic_dec(&pgdat->shrink_spin_lock_count);
 	}
 }
 EXPORT_SYMBOL_GPL(check_move_unevictable_pages);
+/***********************************************************************************/
+static unsigned int async_shrink_free_page(struct pglist_data *pgdat,struct lruvec *lruvec,struct list_head *page_list,
+		                           struct scan_control *sc,enum lru_list lru)
+{
+    LIST_HEAD(ret_pages);
+    LIST_HEAD(free_pages);
+    struct page *page;
+    struct address_space *mapping;
+    unsigned int nr_reclaimed = 0;
+    unsigned int nr_writeback = 0;
+    unsigned int nr_dirty = 0;
+    int may_enter_fs;
+    int pgactivate = 0;
+
+    while (!list_empty(page_list)) {
+        cond_resched();
+
+	page = lru_to_page(page_list);
+	list_del(&page->lru);
+	if (!trylock_page(page))
+	    goto keep;
+
+        mapping = page_mapping(page);
+        may_enter_fs = (sc->gfp_mask & __GFP_FS);
+
+	/*************************/
+	if (PageWriteback(page)) {
+	    SetPageReclaim(page);
+	    nr_writeback++;
+	    goto activate_locked;
+	}
+
+	/*************************/
+	if (PageDirty(page)) {
+		if(open_shrink_printk)
+		    printk("9:%s %s %d page:0x%llx page->flags:0x%lx PageDirty;%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageDirty(page));
+                nr_dirty++;
+	        /*if (page_is_file_cache(page) &&
+		    (!current_is_kswapd() || !PageReclaim(page) ||
+		     !test_bit(PGDAT_DIRTY, &pgdat->flags))) {
+
+		     if(open_shrink_printk)
+			    printk("10:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			inc_node_page_state(page, NR_VMSCAN_IMMEDIATE);
+			SetPageReclaim(page);
+
+			goto activate_locked;
+		}*/
+
+		//if (references == PAGEREF_RECLAIM_CLEAN)
+		//	goto keep_locked;
+		if (!may_enter_fs)
+			goto keep_locked;
+		//if (!sc->may_writepage)
+		//	goto keep_locked;
+
+		
+		try_to_unmap_flush_dirty();
+		switch (pageout(page, mapping, sc)) {
+		case PAGE_KEEP:
+			if(open_shrink_printk)
+			    printk("12:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->keep_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			goto keep_locked;
+		case PAGE_ACTIVATE:
+			if(open_shrink_printk)
+			    printk("13:%s %s %d page:0x%llx page->flags:0x%lx PageDirty ->activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			goto activate_locked;
+		case PAGE_SUCCESS:
+			if(open_shrink_printk)
+			    printk("14:%s %s %d page:0x%llx page->flags:0x%lx PageDirty PageWriteback:%d PageDirty:%d PG_locked:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageWriteback(page),PageDirty(page),PageLocked(page));
+			if (PageWriteback(page))
+				goto keep;
+			if (PageDirty(page))
+				goto keep;
+
+			if (!trylock_page(page))
+				goto keep;
+			if (PageDirty(page) || PageWriteback(page))
+				goto keep_locked;
+			mapping = page_mapping(page);
+			if(open_shrink_printk)
+			    printk("15:%s %s %d page:0x%llx page->flags:0x%lx \n",__func__,current->comm,current->pid,(u64)page,page->flags);
+		case PAGE_CLEAN:
+			if(open_shrink_printk)
+			    printk("16:%s %s %d page:0x%llx page->flags:0x%lx PageDirty PAGE_CLEAN\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			; /* try to free the page below */
+		}
+	}
+
+	/*************************/
+	if (page_has_private(page)) {
+		if(open_shrink_printk)
+		    printk("17:%s %s %d page:0x%llx page->flags:0x%lx mapping:0x%llx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags,(u64)mapping);
+
+		if (!try_to_release_page(page,sc->gfp_mask)){
+			if(open_shrink_printk)
+			    printk("18:%s %s %d page:0x%llx page->flags:0x%lx activate_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+			goto activate_locked;
+		}
+		if (!mapping && page_count(page) == 1) {
+			unlock_page(page);
+			if (put_page_testzero(page)){
+				if(open_shrink_printk)
+				    printk("18_1:%s %s %d page:0x%llx page->flags:0x%lx put_page_testzero\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+				goto free_it;
+			}
+			else {
+				if(open_shrink_printk)
+				    printk("18_2:%s %s %d page:0x%llx page->flags:0x%lx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+
+				nr_reclaimed++;
+				continue;
+			}
+		}
+	}
+
+	unlock_page(page);
+free_it:
+	nr_reclaimed++;
+	list_add(&page->lru, &free_pages);
+	continue;
+activate_locked:
+	if (!PageMlocked(page)) {
+	     SetPageActive(page);
+	     pgactivate++;
+	     count_memcg_page_event(page, PGACTIVATE);
+	}
+keep_locked:
+	unlock_page(page);
+keep:
+        list_add(&page->lru, &ret_pages);
+    }
+    mem_cgroup_uncharge_list(&free_pages);
+    try_to_unmap_flush();
+    free_unref_page_list(&free_pages);
+    list_splice(&ret_pages, page_list);
+    count_vm_events(PGACTIVATE, pgactivate);
+
+    return nr_reclaimed;
+}
+void inline update_async_shrink_page(struct page *page)
+{
+    struct page *async_shrink_page = page_pgdat(page)->async_shrink_page;
+    if(unlikely(async_shrink_page && async_shrink_page == page)){
+	//当前page要从lru链表剔除，于是要获取page的上一个page保存到async_shrink_page，从而不中断check_idle_page_and_clear 函数中list_for_each_entry_from_reverse遍历链表
+        page_pgdat(page)->async_shrink_page = list_prev_entry(page,lru);
+    }
+}
+/*检查page的空闲状态，返回值 0,1,2,3
+ * 
+ */
+static inline int check_page_idle(struct page *page){
+    if(!PageCompound(page) && page_is_file_cache(page) && !page_mapped(page)){
+       if(PageIdle(page) && !PageYoung(page))
+           return 1;
+       else
+	   return 0;
+    }
+    return -1;
+}
+static int check_idle_page_and_clear(struct pglist_data *pgdat,struct lruvec *lruvec,enum lru_list lru){
+    struct list_head *page_list_head; 
+    struct page *page = NULL;
+    unsigned int page_idle_status;
+    unsigned int free_page_count,all_page_count,scan_page_count;
+    unsigned long start_time,dx;
+    LIST_HEAD(free_list);
+    struct scan_control sc = {
+	.gfp_mask = GFP_KERNEL,
+	.order = 1,
+	.priority = DEF_PRIORITY,
+	.may_writepage = 1,
+	.may_unmap = 0,
+	.may_swap = 0,
+    };
+
+
+    if(!(lru == LRU_INACTIVE_FILE || lru == LRU_ACTIVE_FILE))
+       return 0;
+
+    all_page_count = lruvec_lru_size(lruvec,lru, MAX_NR_ZONES);
+    if(open_shrink_printk)
+        printk("1:%s %s %d all_page_count:%d\n",__func__,current->comm,current->pid,all_page_count);
+
+    page_list_head = &lruvec->lists[lru];
+    if(!list_empty(page_list_head))
+        return 0;
+    
+    start_time = jiffies;
+    free_page_count = 0;
+    scan_page_count = 0;
+
+    spin_lock_irq(&pgdat->lru_lock);
+    pgdat->async_shrink_page = NULL;
+    page = lru_to_page(page_list_head);//获取链表尾的page
+    //遍历链表，从链表尾开始遍历
+    //while(list_empty(!page_list_head)){
+        list_for_each_entry_from_reverse(page,page_list_head,lru){
+	    scan_page_count ++;
+	    page_idle_status = check_page_idle(page);
+            if(page_idle_status == 1){
+		//把page从原链表剔除再添加到free_list链表
+	        //list_move(&page->lru, &free_list);
+		free_page_count ++;
+	    }
+            else if(page_idle_status == 0){
+		//标记page ilde标记
+	        SetPageIdle(page);
+		//清理page的Young标记
+		TestClearPageYoung(page);
+	    }
+	    dx = jiffies_to_msecs(jiffies - start_time);
+	    //遍历链表过了20ms，检查一下是否有进程卡在lru_lock锁
+	    if(dx > 20){
+		//有其他进程卡在lru_lock锁，就需要释放lru_lock了，然后休眠几十ms
+		if(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
+                    //对async_shrink_page赋值必须放到spin lock锁里。此时其他进程卡在lru_lock锁上。等下边spin unlock后，pgdat->async_shrink_page保存的page就生效了
+		    pgdat->async_shrink_page = page;
+		    spin_unlock_irq(&pgdat->lru_lock);
+		    while(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
+			msleep(10);
+		    }
+		    page = pgdat->async_shrink_page;
+		    spin_lock_irq(&pgdat->lru_lock);
+		    start_time = jiffies;
+		    pgdat->async_shrink_page = NULL;
+		}
+	    }
+	    //遍历链表过了100ms，休眠一段时间
+	    else if(dx > 100) {
+		    //重置休眠的遍历到的page
+		    pgdat->async_shrink_page = page;
+		    spin_unlock_irq(&pgdat->lru_lock);
+		    msleep(20);
+		    //在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
+		    page = pgdat->async_shrink_page;
+		    //pgdat->async_shrink_page = NULL;
+
+		    //重置起始记录时间,但要放到spin_lock_irq锁后，因为在spin_lock_irq获取锁时可能获取锁失败而阻塞一段时间
+		    //start_time = jiffies;
+		    //从msleep唤醒后，pgdat->async_shrink_page就要被立即赋值NULL，不能再影响page从lru file链表剔除。但是从msleep重新运行后到spin_lock_irq获取锁这段期间,pgdat->async_shrink_page
+		    //因为有效，一直在page从从lru剔除掉时而会执行到update_async_shrink_page函数，一直更新pgdat->async_shrink_page。这个没办法避免，但是page = pgdat->async_shrink_page赋值必须
+		    //放到spin lock锁之前，而pgdat->async_shrink_page = NULL赋值必须放到spin lock锁后边。如果pgdat->async_shrink_page = NULL赋值spin lock锁之前，page = pgdat->async_shrink_page后
+		    //接着就pgdat->async_shrink_page = NULL。其他进程把要最新的page从lru file链表剔除了，而pgdat->async_shrink_page 是NULL，就无法执行update_async_shrink_page函数把最新的page的上一个
+		    //page保存到pgdat->async_shrink_page。这样第一次page = pgdat->async_shrink_page得到的page就是一个无效的page了，从链表剔除了
+		    spin_lock_irq(&pgdat->lru_lock);
+		    //在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
+		    //page = pgdat->async_shrink_page;
+		    pgdat->async_shrink_page = NULL;
+
+		    //重置起始记录时间
+		    start_time = jiffies;
+                    if(open_shrink_printk)
+                        printk("2:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
+	    }
+	    //遍历page数超过最大数，结束遍历page
+	    if(scan_page_count > all_page_count)
+                break;
+	}
+    //}
+    if(open_shrink_printk)
+        printk("3:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
+    async_shrink_free_page(pgdat,lruvec,&free_list,&sc,lru);
+
+    return free_page_count;
+}
+static int async_shrink_memory(void *p){
+    pg_data_t *pgdat = (pg_data_t*)p;
+    struct mem_cgroup *memcg,*root = NULL;
+    int sleep_count = 0;
+    int ret;
+
+    while(!async_shrink_enable)
+        msleep(1000);
+
+    while(1){
+	root = NULL;
+	memcg = mem_cgroup_iter(root, NULL, NULL);
+        
+	ret = 0;
+        do {
+            struct lruvec *lruvec = mem_cgroup_lruvec(memcg, pgdat);
+	    //只回收active/inactive file
+            ret =  check_idle_page_and_clear(pgdat,lruvec,LRU_INACTIVE_FILE);
+            ret += check_idle_page_and_clear(pgdat,lruvec,LRU_ACTIVE_FILE);
+	}while ((memcg = mem_cgroup_iter(root, memcg, NULL)));
+
+        if (kthread_should_stop())
+	    break;
+        sleep_count = 0;
+	while(sleep_count ++ < 60)
+            msleep(1000);
+    }
+    return 0;
+}
