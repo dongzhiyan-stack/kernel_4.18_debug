@@ -2903,6 +2903,10 @@ void free_unref_page_list(struct list_head *list)
 	list_for_each_entry_safe(page, next, list, lru) {
 		unsigned long pfn = page_private(page);
 
+		if(atomic_read(&page->_refcount) != 0){
+                    printk("%s page:0x%llx refcount:%d\n",__func__,(u64)page,atomic_read(&page->_refcount));
+		    panic("page refcount error");
+		}
 		set_page_private(page, 0);
 		trace_mm_page_free_batched(page);
 		free_unref_page_commit(page, pfn);

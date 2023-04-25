@@ -1928,9 +1928,7 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 		list_del(&page->lru);
 		if (unlikely(!page_evictable(page))) {
 			spin_unlock_irq(&pgdat->lru_lock);
-			atomic_inc(&pgdat->shrink_spin_lock_count);
 			putback_lru_page(page);
-			atomic_inc(&pgdat->shrink_spin_lock_count);
 			spin_lock_irq(&pgdat->lru_lock);
 			continue;
 		}
@@ -1955,10 +1953,8 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
-				atomic_dec(&pgdat->shrink_spin_lock_count);
 				mem_cgroup_uncharge(page);
 				(*get_compound_page_dtor(page))(page);
-			        atomic_inc(&pgdat->shrink_spin_lock_count);
 				spin_lock_irq(&pgdat->lru_lock);
 			} else
 				list_add(&page->lru, &pages_to_free);
@@ -2023,7 +2019,6 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	if (!sc->may_unmap)
 		isolate_mode |= ISOLATE_UNMAPPED;
 
-	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &page_list,
@@ -2044,7 +2039,6 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 				   nr_scanned);
 	}
 	spin_unlock_irq(&pgdat->lru_lock);
-	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	if (nr_taken == 0)
 		return 0;
@@ -2052,7 +2046,6 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	nr_reclaimed = shrink_page_list(&page_list, pgdat, sc, 0,
 				&stat, false);
 
-        atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	if (current_is_kswapd()) {
@@ -2073,7 +2066,6 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&pgdat->lru_lock);
-	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	mem_cgroup_uncharge_list(&page_list);
 	free_unref_page_list(&page_list);
@@ -2160,10 +2152,8 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
-				atomic_dec(&pgdat->shrink_spin_lock_count);
 				mem_cgroup_uncharge(page);
 				(*get_compound_page_dtor(page))(page);
-			        atomic_inc(&pgdat->shrink_spin_lock_count);
 				spin_lock_irq(&pgdat->lru_lock);
 			} else
 				list_add(&page->lru, pages_to_free);
@@ -2207,7 +2197,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 
         if(open_shrink_printk)
 		printk("1:%s %s %d nr_to_scan:%ld isolate_mode:%d\n",__func__,current->comm,current->pid,nr_to_scan,isolate_mode);
-	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
@@ -2220,7 +2209,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	count_memcg_events(lruvec_memcg(lruvec), PGREFILL, nr_scanned);
 
 	spin_unlock_irq(&pgdat->lru_lock);
-	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	while (!list_empty(&l_hold)) {
 		cond_resched();
@@ -2263,7 +2251,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		list_add(&page->lru, &l_inactive);
 	}
 
-	atomic_inc(&pgdat->shrink_spin_lock_count);
 	/*
 	 * Move pages back to the lru list.
 	 */
@@ -2282,7 +2269,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	nr_deactivate = move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	spin_unlock_irq(&pgdat->lru_lock);
-	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	mem_cgroup_uncharge_list(&l_hold);
 	free_unref_page_list(&l_hold);
@@ -2528,7 +2514,6 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	file  = lruvec_lru_size(lruvec, LRU_ACTIVE_FILE, MAX_NR_ZONES) +
 		lruvec_lru_size(lruvec, LRU_INACTIVE_FILE, MAX_NR_ZONES);
 
-	atomic_inc(&pgdat->shrink_spin_lock_count);
 	spin_lock_irq(&pgdat->lru_lock);
 	if (unlikely(reclaim_stat->recent_scanned[0] > anon / 4)) {
 		reclaim_stat->recent_scanned[0] /= 2;
@@ -2551,7 +2536,6 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	fp = file_prio * (reclaim_stat->recent_scanned[1] + 1);
 	fp /= reclaim_stat->recent_rotated[1] + 1;
 	spin_unlock_irq(&pgdat->lru_lock);
-	atomic_dec(&pgdat->shrink_spin_lock_count);
 
 	fraction[0] = ap;
 	fraction[1] = fp;
@@ -4363,12 +4347,9 @@ void check_move_unevictable_pages(struct pagevec *pvec)
 
 		pgscanned++;
 		if (pagepgdat != pgdat) {
-			if (pgdat){
+			if (pgdat)
 				spin_unlock_irq(&pgdat->lru_lock);
-				atomic_dec(&pgdat->shrink_spin_lock_count);
-			}
 			pgdat = pagepgdat;
-			atomic_inc(&pgdat->shrink_spin_lock_count);
 			spin_lock_irq(&pgdat->lru_lock);
 		}
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
@@ -4391,7 +4372,6 @@ void check_move_unevictable_pages(struct pagevec *pvec)
 		__count_vm_events(UNEVICTABLE_PGRESCUED, pgrescued);
 		__count_vm_events(UNEVICTABLE_PGSCANNED, pgscanned);
 		spin_unlock_irq(&pgdat->lru_lock);
-		atomic_dec(&pgdat->shrink_spin_lock_count);
 	}
 }
 EXPORT_SYMBOL_GPL(check_move_unevictable_pages);
@@ -4414,20 +4394,25 @@ static unsigned int async_shrink_free_page(struct pglist_data *pgdat,struct lruv
 
 	page = lru_to_page(page_list);
 	list_del(&page->lru);
+
+        //内存回收过程，page又被访问过了，则不能释放该page
+	if((!PageIdle(page) || PageYoung(page)))
+            goto keep;
+
 	if (!trylock_page(page))
 	    goto keep;
 
         mapping = page_mapping(page);
         may_enter_fs = (sc->gfp_mask & __GFP_FS);
 
-	/*************************/
+	/****page是witeback标记*********************/
 	if (PageWriteback(page)) {
 	    SetPageReclaim(page);
 	    nr_writeback++;
 	    goto activate_locked;
 	}
 
-	/*************************/
+	/****page是脏页*********************/
 	if (PageDirty(page)) {
 		if(open_shrink_printk)
 		    printk("9:%s %s %d page:0x%llx page->flags:0x%lx PageDirty;%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,PageDirty(page));
@@ -4484,7 +4469,7 @@ static unsigned int async_shrink_free_page(struct pglist_data *pgdat,struct lruv
 		}
 	}
 
-	/*************************/
+	/*******释放page的bh******************/
 	if (page_has_private(page)) {
 		if(open_shrink_printk)
 		    printk("17:%s %s %d page:0x%llx page->flags:0x%lx mapping:0x%llx page_has_private\n",__func__,current->comm,current->pid,(u64)page,page->flags,(u64)mapping);
@@ -4510,6 +4495,13 @@ static unsigned int async_shrink_free_page(struct pglist_data *pgdat,struct lruv
 			}
 		}
 	}
+        /********把page从radix tree剔除************************/
+        if (!mapping || !__remove_mapping(mapping, page, true)){
+            if(open_shrink_printk)
+            printk("19:%s %s %d page:0x%llx page->flags:0x%lx mapping:0x%llx keep_locked\n",__func__,current->comm,current->pid,(u64)page,page->flags,(u64)mapping);
+	    goto keep_locked;
+        }
+
 
 	unlock_page(page);
 free_it:
@@ -4543,25 +4535,111 @@ void inline update_async_shrink_page(struct page *page)
         page_pgdat(page)->async_shrink_page = list_prev_entry(page,lru);
     }
 }
-/*检查page的空闲状态，返回值 0,1,2,3
- * 
+static inline int async_isolate_lru_pages(struct scan_control *sc,isolate_mode_t mode,struct page *page,
+	                                  struct lruvec *lruvec,enum lru_list lru,struct list_head *dst)
+{
+        //struct list_head *src = &lruvec->lists[lru];
+        unsigned long nr_taken = 0;
+	unsigned long nr_zone_taken[MAX_NR_ZONES] = { 0 };
+	unsigned long nr_skipped[MAX_NR_ZONES] = { 0, };
+	unsigned long skipped = 0;
+	unsigned long /*scan, total_scan,*/ nr_pages;
+	//LIST_HEAD(pages_skipped);
+        int ret = 0;
+
+	//page = lru_to_page(src);
+	//prefetchw_prev_lru_page(page, src, flags);
+	VM_BUG_ON_PAGE(!PageLRU(page), page);
+
+	/*在这里的isolate_lru_pages函数里，不再把skip page移动来移动去，该page只会在原始lru file链表不动。只会把__count_zid_vm_events统计PGSCAN_SKIP的代码移动到这里*/
+	//打印证实，page_zonenum(page)都是0，sc->reclaim_idx如果是默认值的话，就一个内存page都无法回收了!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	if (page_zonenum(page) > sc->reclaim_idx) {
+	        int zid;	
+
+  	        if(open_shrink_printk)
+		    printk("1:%s %s %d page:0x%llx page->flags:0x%lx page_zonenum(page):%d sc->reclaim_idx:%d\n",__func__,current->comm,current->pid,(u64)page,page->flags,page_zonenum(page),sc->reclaim_idx);
+		//list_move(&page->lru, &pages_skipped);
+		nr_skipped[page_zonenum(page)]++;
+		//continue;
+		for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+		    if (!nr_skipped[zid])
+			    continue;
+
+		    __count_zid_vm_events(PGSCAN_SKIP, zid, nr_skipped[zid]);
+		    skipped += nr_skipped[zid];
+		}
+
+		return ret;
+	}
+        /*这里边，__isolate_lru_page里清除page的PageLRU属性，因为要把page从lru链表剔除了*/
+	switch (__isolate_lru_page(page, mode)) {
+	case 0:
+		nr_pages = hpage_nr_pages(page);
+		nr_taken += nr_pages;
+		nr_zone_taken[page_zonenum(page)] += nr_pages;
+		list_move(&page->lru, dst);
+		ret = 1;
+		break;
+
+	case -EBUSY:
+		if(open_shrink_printk)
+		    printk("2:%s %s %d page:0x%llx page->flags:0x%lx EBUSY\n",__func__,current->comm,current->pid,(u64)page,page->flags);
+		/* else it is being freed elsewhere */
+		//list_move(&page->lru, src);
+		break;
+
+	default:
+            if(open_shrink_printk)
+                printk("3:%s %s %d PageUnevictable:%d PageLRU:%d\n",__func__,current->comm,current->pid,PageUnevictable(page),PageLRU(page));
+
+		BUG();
+	}
+
+	/*if (!list_empty(&pages_skipped)) {
+		int zid;
+		list_splice(&pages_skipped, src);
+		for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+			if (!nr_skipped[zid])
+				continue;
+
+			__count_zid_vm_events(PGSCAN_SKIP, zid, nr_skipped[zid]);
+			skipped += nr_skipped[zid];
+		}
+	}*/
+
+	/*更新 acitve/inactive file 链入链表的page数，减少nr_taken个，因为page将要从lru链表移除*/
+	update_lru_sizes(lruvec, lru, nr_zone_taken);
+	return ret;
+}
+/*检查page的空闲状态，返回值 
+ * -1:page不是file cache
+ *  0:page 是file cache，但page不空闲
+ *  1:page 是file cache，且page空闲
  */
-static inline int check_page_idle(struct page *page){
-    if(!PageCompound(page) && page_is_file_cache(page) && !page_mapped(page)){
+static inline int check_page_idle(struct page *page)
+{
+    if(!PageCompound(page) && page_is_file_cache(page) && !page_mapped(page) && !PageUnevictable(page)){
        if(PageIdle(page) && !PageYoung(page))
            return 1;
        else
 	   return 0;
     }
+    if(PageUnevictable(page) || PageCompound(page)){
+        if(open_shrink_printk)
+            printk("1:%s %s %d PageUnevictable:%d PageCompound:%d\n",__func__,current->comm,current->pid,PageUnevictable(page),PageCompound(page));
+    }
     return -1;
 }
-static int check_idle_page_and_clear(struct pglist_data *pgdat,struct lruvec *lruvec,enum lru_list lru){
+static int async_shrink_active_inactive_list(struct pglist_data *pgdat,struct lruvec *lruvec,enum lru_list lru){
     struct list_head *page_list_head; 
     struct page *page = NULL;
     unsigned int page_idle_status;
-    unsigned int free_page_count,all_page_count,scan_page_count;
+    unsigned int free_page_count,all_page_count,scan_page_count,sleep_count,check_scan_count;
     unsigned long start_time,dx;
+    isolate_mode_t isolate_mode = 0;
     LIST_HEAD(free_list);
+    unsigned long nr_reclaimed;
+
     struct scan_control sc = {
 	.gfp_mask = GFP_KERNEL,
 	.order = 1,
@@ -4569,6 +4647,7 @@ static int check_idle_page_and_clear(struct pglist_data *pgdat,struct lruvec *lr
 	.may_writepage = 1,
 	.may_unmap = 0,
 	.may_swap = 0,
+	.reclaim_idx = MAX_NR_ZONES - 1
     };
 
 
@@ -4580,84 +4659,134 @@ static int check_idle_page_and_clear(struct pglist_data *pgdat,struct lruvec *lr
         printk("1:%s %s %d all_page_count:%d\n",__func__,current->comm,current->pid,all_page_count);
 
     page_list_head = &lruvec->lists[lru];
-    if(!list_empty(page_list_head))
+    if(list_empty(page_list_head))
         return 0;
-    
+
+    if (!sc.may_unmap)
+        isolate_mode |= ISOLATE_UNMAPPED;
+
     start_time = jiffies;
     free_page_count = 0;
     scan_page_count = 0;
-
+    check_scan_count = 0;
     spin_lock_irq(&pgdat->lru_lock);
     pgdat->async_shrink_page = NULL;
     page = lru_to_page(page_list_head);//获取链表尾的page
     //遍历链表，从链表尾开始遍历
-    //while(list_empty(!page_list_head)){
-        list_for_each_entry_from_reverse(page,page_list_head,lru){
-	    scan_page_count ++;
-	    page_idle_status = check_page_idle(page);
-            if(page_idle_status == 1){
+    list_for_each_entry_from_reverse(page,page_list_head,lru){
+	scan_page_count ++;
+    
+	//只有page所属块设备的主次设备号是async_shrink_enable指定的，page才允许回收。这是防止内存回收代码bug导致异常回收，损坏重要文件系统
+	//page 的mapping 存在是NULL的情况，要做防护
+        if(!page_mapping(page) || async_shrink_enable != page_mapping(page)->host->i_sb->s_dev)
+	    goto expire_check;
+
+	//检测page是否空闲
+	page_idle_status = check_page_idle(page);
+	if(page_idle_status == 1){
+	    if(open_shrink_printk)
+	        printk("2:%s %s %d free_page_count:%d scan_page_count:%d page:0x%llx flag:0x%lx\n",__func__,current->comm,current->pid,free_page_count,scan_page_count,(u64)page,page->flags);
+
+	    //检测该page能否符合内存回收隔离条件，ok的话清理page的lru属性,把page添加到free_list链表，并且令lru链表减少page数，page引用计数加1,返回1
+            if(async_isolate_lru_pages(&sc,isolate_mode,page,lruvec,lru,&free_list)){
+	        if(PageActive(page))//如果是active page则清理掉
+		    ClearPageActive(page);
+
+		//更新全局 NR_ISOLATED_FILE 隔离page数计数，这个不用添加
+		//__mod_node_page_state(pgdat, NR_ISOLATED_FILE, nr_taken);
+		//reclaim_stat->recent_scanned[1] += nr_taken;------这个与内存回收get_scan_count()统计scan 的page数有关，不添加
+
 		//把page从原链表剔除再添加到free_list链表
-	        //list_move(&page->lru, &free_list);
+		//list_move(&page->lru, &free_list);------移动到了async_isolate_lru_pages函数
 		free_page_count ++;
 	    }
-            else if(page_idle_status == 0){
-		//标记page ilde标记
-	        SetPageIdle(page);
-		//清理page的Young标记
-		TestClearPageYoung(page);
-	    }
-	    dx = jiffies_to_msecs(jiffies - start_time);
-	    //遍历链表过了20ms，检查一下是否有进程卡在lru_lock锁
-	    if(dx > 20){
-		//有其他进程卡在lru_lock锁，就需要释放lru_lock了，然后休眠几十ms
-		if(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
-                    //对async_shrink_page赋值必须放到spin lock锁里。此时其他进程卡在lru_lock锁上。等下边spin unlock后，pgdat->async_shrink_page保存的page就生效了
-		    pgdat->async_shrink_page = page;
-		    spin_unlock_irq(&pgdat->lru_lock);
-		    while(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
-			msleep(10);
-		    }
-		    page = pgdat->async_shrink_page;
-		    spin_lock_irq(&pgdat->lru_lock);
-		    start_time = jiffies;
-		    pgdat->async_shrink_page = NULL;
-		}
-	    }
-	    //遍历链表过了100ms，休眠一段时间
-	    else if(dx > 100) {
-		    //重置休眠的遍历到的page
-		    pgdat->async_shrink_page = page;
-		    spin_unlock_irq(&pgdat->lru_lock);
-		    msleep(20);
-		    //在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
-		    page = pgdat->async_shrink_page;
-		    //pgdat->async_shrink_page = NULL;
-
-		    //重置起始记录时间,但要放到spin_lock_irq锁后，因为在spin_lock_irq获取锁时可能获取锁失败而阻塞一段时间
-		    //start_time = jiffies;
-		    //从msleep唤醒后，pgdat->async_shrink_page就要被立即赋值NULL，不能再影响page从lru file链表剔除。但是从msleep重新运行后到spin_lock_irq获取锁这段期间,pgdat->async_shrink_page
-		    //因为有效，一直在page从从lru剔除掉时而会执行到update_async_shrink_page函数，一直更新pgdat->async_shrink_page。这个没办法避免，但是page = pgdat->async_shrink_page赋值必须
-		    //放到spin lock锁之前，而pgdat->async_shrink_page = NULL赋值必须放到spin lock锁后边。如果pgdat->async_shrink_page = NULL赋值spin lock锁之前，page = pgdat->async_shrink_page后
-		    //接着就pgdat->async_shrink_page = NULL。其他进程把要最新的page从lru file链表剔除了，而pgdat->async_shrink_page 是NULL，就无法执行update_async_shrink_page函数把最新的page的上一个
-		    //page保存到pgdat->async_shrink_page。这样第一次page = pgdat->async_shrink_page得到的page就是一个无效的page了，从链表剔除了
-		    spin_lock_irq(&pgdat->lru_lock);
-		    //在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
-		    //page = pgdat->async_shrink_page;
-		    pgdat->async_shrink_page = NULL;
-
-		    //重置起始记录时间
-		    start_time = jiffies;
-                    if(open_shrink_printk)
-                        printk("2:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
-	    }
-	    //遍历page数超过最大数，结束遍历page
-	    if(scan_page_count > all_page_count)
-                break;
 	}
-    //}
+	//page_idle_status说明page是page cache，但该page不空闲，则设置page空闲
+	else if(page_idle_status == 0){
+	    //标记page idle
+	    SetPageIdle(page);
+	    //清理page的Young标记
+	    TestClearPageYoung(page);
+	}
+
+expire_check:
+	dx = jiffies_to_msecs(jiffies - start_time);
+	//遍历链表过了20ms，检查一下是否有进程卡在lru_lock锁。但这个方案可能会造成比较大的延迟，于是参考get_scan_count()和isolate_lru_pages()遍历lru链表上的page，改成
+	//遍历固定数目的page后，就检测是否有进程卡在lru_lock锁，有的话就休眠
+	//if(dx > 20){
+	if(check_scan_count++ == 128){
+	    check_scan_count = 0;
+	    //有其他进程卡在lru_lock锁，就需要释放lru_lock了，然后休眠几十ms
+	    //if(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
+	    if(spin_is_contended(&pgdat->lru_lock)){//spin_is_contended()返回true，说明有一个进程是有lock锁，然后至少还有一个进程在等待释放锁
+		if(open_shrink_printk)
+		    printk("3:%s %s %d spin_is_contended:%d\n",__func__,current->comm,current->pid,spin_is_contended(&pgdat->lru_lock));
+
+		//对async_shrink_page赋值必须放到spin lock锁里。此时其他进程卡在lru_lock锁上。等下边spin unlock后，pgdat->async_shrink_page保存的page就生效了。
+		//在msleep休眠这段时间，其他进程要是把pgdat->async_shrink_page保存的page从lru链表剔除，就会执行update_async_shrink_page()把pgdat->async_shrink_page
+		//在lru file链表的上一个page保存到pgdat->async_shrink_page。
+		pgdat->async_shrink_page = page;
+		spin_unlock_irq(&pgdat->lru_lock);
+		sleep_count = 0;
+		//休眠等待所有进程全释放lru_lock锁，但是如果休眠时间过长就退出休眠抢占lru_lock锁
+		//while(atomic_read(&pgdat->shrink_spin_lock_count) > 0 && sleep_count++ < 5){
+		while(spin_is_contended(&pgdat->lru_lock) && sleep_count++ < 5){
+		    msleep(10);
+		}
+
+		//page = pgdat->async_shrink_page;
+		spin_lock_irq(&pgdat->lru_lock);
+		start_time = jiffies;
+		pgdat->async_shrink_page = page;
+		pgdat->async_shrink_page = NULL;
+	    }
+	}
+	//遍历链表过了100ms，休眠一段时间
+	else if(dx > 100) {
+		//重置休眠的遍历到的page
+		pgdat->async_shrink_page = page;
+		spin_unlock_irq(&pgdat->lru_lock);
+		msleep(20);
+		//在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
+		//page = pgdat->async_shrink_page;
+		//pgdat->async_shrink_page = NULL;
+
+		//重置起始记录时间,但要放到spin_lock_irq锁后，因为在spin_lock_irq获取锁时可能获取锁失败而阻塞一段时间
+		//start_time = jiffies;
+
+		//从msleep唤醒后，pgdat->async_shrink_page就要被立即赋值NULL，不能再影响page从lru file链表剔除。但是从msleep重新运行后到spin_lock_irq获取锁这段期间,pgdat->async_shrink_page
+		//因为有效，一直在page从从lru剔除掉时而会执行到update_async_shrink_page函数，一直更新pgdat->async_shrink_page。这个没办法避免，但是page = pgdat->async_shrink_page赋值必须
+		//放到spin lock锁之前，而pgdat->async_shrink_page = NULL赋值必须放到spin lock锁后边。如果pgdat->async_shrink_page = NULL赋值spin lock锁之前，page = pgdat->async_shrink_page后
+		//接着就pgdat->async_shrink_page = NULL。其他进程把要最新的page从lru file链表剔除了，而pgdat->async_shrink_page 是NULL，就无法执行update_async_shrink_page函数把最新的page的上一个
+		//page保存到pgdat->async_shrink_page。这样第一次page = pgdat->async_shrink_page得到的page就是一个无效的page了，从链表剔除了.因此，page = pgdat->async_shrink_page也必须放到
+		//spin_lock_irq获取锁之后，因为从msleep唤醒到spin_lock_irq成功获取锁，pgdat->async_shrink_page指向的page可能被从lru链表剔除，因此pgdat->async_shrink_page会被实时更新为
+		//上一个page。而获取锁成功后，其他进程就无法再从lru链表剔除page了，pgdat->async_shrink_page就不再变化了，也是最新的。ok，此时page = pgdat->async_shrink_page后，page是最新有效的
+		//,然后回到list_for_each_entry_from_reverse(page,page_list_head,lru),继续从休眠前中断的page继续向file lru链表遍历page
+		spin_lock_irq(&pgdat->lru_lock);
+		//在休眠这段时间，老的page可能被del了，shrink_page记录最新的有效page
+		page = pgdat->async_shrink_page;
+		pgdat->async_shrink_page = NULL;
+
+		//重置起始记录时间
+		start_time = jiffies;
+		if(open_shrink_printk)
+		    printk("4:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
+	}
+	//遍历page数超过最大数，结束遍历page
+	if(scan_page_count > all_page_count)
+	    break;
+    }
+    spin_unlock_irq(&pgdat->lru_lock);
     if(open_shrink_printk)
-        printk("3:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
-    async_shrink_free_page(pgdat,lruvec,&free_list,&sc,lru);
+        printk("5:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
+    //释放page，不符合释放条件的page再移回free_list链表---------------------------如果free_list上的page太多，async_shrink_free_page函数耗时会很长，可以每回收几十个page休眠一段时间
+    nr_reclaimed = async_shrink_free_page(pgdat,lruvec,&free_list,&sc,lru);
+    //把free_list残留的链表再移动回 inactive/active lru链表，同时令这些page引用计数减1
+    putback_inactive_pages(lruvec, &free_list);
+
+    //释放应用计数是0的page
+    mem_cgroup_uncharge_list(&free_list);
+    free_unref_page_list(&free_list);
 
     return free_page_count;
 }
@@ -4678,14 +4807,15 @@ static int async_shrink_memory(void *p){
         do {
             struct lruvec *lruvec = mem_cgroup_lruvec(memcg, pgdat);
 	    //只回收active/inactive file
-            ret =  check_idle_page_and_clear(pgdat,lruvec,LRU_INACTIVE_FILE);
-            ret += check_idle_page_and_clear(pgdat,lruvec,LRU_ACTIVE_FILE);
+            ret =  async_shrink_active_inactive_list(pgdat,lruvec,LRU_INACTIVE_FILE);
+            ret += async_shrink_active_inactive_list(pgdat,lruvec,LRU_ACTIVE_FILE);
 	}while ((memcg = mem_cgroup_iter(root, memcg, NULL)));
 
-        if (kthread_should_stop())
+        if (kthread_should_stop() || !async_shrink_enable)
 	    break;
+
         sleep_count = 0;
-	while(sleep_count ++ < 60)
+	while(sleep_count ++ < 10)
             msleep(1000);
     }
     return 0;
