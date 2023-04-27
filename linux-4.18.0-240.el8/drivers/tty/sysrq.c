@@ -329,7 +329,7 @@ static void sysrq_handle_showmem(int key)
 {
 	//show_mem(0, NULL);
     #if 1
-	if(open_bfqq_printk1)
+	if(open_shrink_printk)
 	    open_shrink_printk = 0;
 	else
 	    open_shrink_printk = 1;
