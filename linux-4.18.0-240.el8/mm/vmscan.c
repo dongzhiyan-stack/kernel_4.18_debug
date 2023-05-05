@@ -64,6 +64,7 @@
 #include <trace/events/vmscan.h>
 /**********************************************************************/
 extern int open_shrink_printk;
+extern int open_shrink_printk1;
 int async_shrink_enable = 0;
 static int async_shrink_memory(void *p);
 void inline update_async_shrink_page(struct page *page);
@@ -4638,7 +4639,7 @@ static int async_shrink_active_inactive_list(struct pglist_data *pgdat,struct lr
 {
     struct list_head *page_list_head; 
     struct page *page = NULL;
-    unsigned int page_idle_status;
+    unsigned int page_idle_status,get_lru_prev_page;
     unsigned int free_page_count,all_page_count,scan_page_count,sleep_count,check_scan_count;
     unsigned long start_time,dx;
     isolate_mode_t isolate_mode = 0;
@@ -4674,6 +4675,7 @@ static int async_shrink_active_inactive_list(struct pglist_data *pgdat,struct lr
     free_page_count = 0;
     scan_page_count = 0;
     check_scan_count = 0;
+    get_lru_prev_page = 0;
     spin_lock_irq(&pgdat->lru_lock);
     //all_page_count放在加锁里，
     all_page_count = lruvec_lru_size(lruvec,lru, MAX_NR_ZONES);
@@ -4688,15 +4690,16 @@ static int async_shrink_active_inactive_list(struct pglist_data *pgdat,struct lr
     
 	//只有page所属块设备的主次设备号是async_shrink_enable指定的，page才允许回收。这是防止内存回收代码bug导致异常回收，损坏重要文件系统
 	//page 的mapping 存在是NULL的情况，要做防护
-	if(open_shrink_printk)
+	if(open_shrink_printk1)
 	    printk("1:%s %s %d free_page_count:%d scan_page_count:%d page:0x%llx flag:0x%lx page_mapping(page):0x%llx lru:%d page_list_head:0x%llx,all_page_count:%d nr_reclaimed:%ld\n",__func__,current->comm,current->pid,free_page_count,scan_page_count,(u64)page,page->flags,(u64)page_mapping(page),lru,(u64)page_list_head,all_page_count,nr_reclaimed);
 	if(!page_mapping(page) || async_shrink_enable != page_mapping(page)->host->i_sb->s_dev)
 	    goto expire_check;
 
+	get_lru_prev_page = 0;
 	//检测page是否空闲
 	page_idle_status = check_page_idle(page);
 	if(page_idle_status == 1){
-	    if(open_shrink_printk)
+	    if(open_shrink_printk1)
 	        printk("2:%s %s %d free_page_count:%d scan_page_count:%d page:0x%llx flag:0x%lx\n",__func__,current->comm,current->pid,free_page_count,scan_page_count,(u64)page,page->flags);
 
 	    //如果page在async_isolate_lru_pages()中隔离成功到free_list链表，则会把page在lru链表的上一个page保存到pgdat->async_shrink_page
@@ -4704,8 +4707,9 @@ static int async_shrink_active_inactive_list(struct pglist_data *pgdat,struct lr
 	    //检测该page能否符合内存回收隔离条件，ok的话清理page的lru属性,把page添加到free_list链表，并且令lru链表减少page数，page引用计数加1,返回1
             if(async_isolate_lru_pages(&sc,isolate_mode,page,lruvec,lru,&free_list)){
 	        if(PageActive(page))//如果是active page则清理掉
-		    ClearPageActive(page);
-
+		    ClearPageActive(page);\
+                //置1说明async_isolate_lru_pages函数里page隔离成功，已经把page在lru链表上一个page保存到async_shrink_page。
+                get_lru_prev_page = 1;
 		//更新全局 NR_ISOLATED_FILE 隔离page数计数，这个不用添加
 		//__mod_node_page_state(pgdat, NR_ISOLATED_FILE, nr_taken);
 		//reclaim_stat->recent_scanned[1] += nr_taken;------这个与内存回收get_scan_count()统计scan 的page数有关，不添加
@@ -4734,7 +4738,7 @@ expire_check:
 	    //if(atomic_read(&pgdat->shrink_spin_lock_count) > 0){
 	    if(spin_is_contended(&pgdat->lru_lock)){//spin_is_contended()返回true，说明有一个进程是有lock锁，然后至少还有一个进程在等待释放锁
 		if(open_shrink_printk)
-		    printk("3:%s %s %d spin_is_contended:%d\n",__func__,current->comm,current->pid,spin_is_contended(&pgdat->lru_lock));
+		    printk("3:%s %s %d spin_is_contended:%d free_page_count:%d scan_page_count:%d page:0x%llx page->flags:0x%lx\n",__func__,current->comm,current->pid,spin_is_contended(&pgdat->lru_lock),free_page_count,scan_page_count,(u64)page,page->flags);
 
 		//对async_shrink_page赋值必须放到spin lock锁里。此时其他进程卡在lru_lock锁上。等下边spin unlock后，pgdat->async_shrink_page保存的page就生效了。
 		//在msleep休眠这段时间，其他进程要是把pgdat->async_shrink_page保存的page从lru链表剔除，就会执行update_async_shrink_page()把pgdat->async_shrink_page
@@ -4743,6 +4747,8 @@ expire_check:
 		    pgdat->async_shrink_page = page;
 		else//如果当前page已经在前边被隔离到free_list链表了，则当前page不在lru链表，是无效的，要使用它在lru链表的上一个有效的page，即pgdat->async_shrink_page
                 {
+		    //走到这里，page肯定是隔离成功的，get_lru_prev_page不可能是0
+		    BUG_ON(!get_lru_prev_page);
 		    page = pgdat->async_shrink_page;
 		}
 		spin_unlock_irq(&pgdat->lru_lock);
@@ -4765,8 +4771,11 @@ expire_check:
 	        if (PageLRU(page))//如果page在lru链表才能按照预定规则保证释放lru_lock后其他进程要是从lru链表剔除该page能更新它在lru链表的上一个page到async_shrink_page。否则pgdat->async_shrink_page要操持NULL
 	            pgdat->async_shrink_page = page;
                 else//如果当前page已经在前边被隔离到free_list链表了，则当前page不在lru链表，是无效的，要使用它在lru链表的上一个的有效的page，即pgdat->async_shrink_page
-                    page = pgdat->async_shrink_page;
-
+		{    
+		    //走到这里，page肯定是隔离成功的，get_lru_prev_page不可能是0
+		    BUG_ON(!get_lru_prev_page);
+		    page = pgdat->async_shrink_page;
+                }
 		spin_unlock_irq(&pgdat->lru_lock);
 
 		msleep(20);
@@ -4801,12 +4810,14 @@ expire_check:
                     //释放应用计数是0的page-------------这个过程需要释放锁，然后再加锁，加锁释放锁太频繁了
                     mem_cgroup_uncharge_list(&free_list);
                     free_unref_page_list(&free_list);
-		    if(!list_empty(&free_list))
-		        panic("free_list not empty 1\n");
+		    //if(!list_empty(&free_list))
+		    //    panic("free_list not empty 1\n");
                 }
+		//重新初始化free_list链表，因为它上边可能他残留无效的page
+	        INIT_LIST_HEAD(&free_list);
 		//重置起始记录时间,但要放到spin_lock_irq锁后，因为在spin_lock_irq获取锁时可能获取锁失败而阻塞一段时间
 		start_time = jiffies;
-		if(open_shrink_printk)
+		if(open_shrink_printk1)
 		    printk("4:%s %s %d free_page_count:%d scan_page_count:%d\n",__func__,current->comm,current->pid,free_page_count,scan_page_count);
 	}
 	
@@ -4820,7 +4831,11 @@ expire_check:
 	    if (PageLRU(page))//如果page在lru链表才能按照预定规则保证释放lru_lock后其他进程要是从lru链表剔除该page能更新它在lru链表的上一个page到async_shrink_page。否则pgdat->async_shrink_page要操持NULL
 	        pgdat->async_shrink_page = page;
             else//如果当前page已经在前边被隔离到free_list链表了，则当前page不在lru链表，是无效的，要使用它在lru链表的上一个的有效的page，即pgdat->async_shrink_page
-                page = pgdat->async_shrink_page;
+	    {    
+		//走到这里，page肯定是隔离成功的，get_lru_prev_page不可能是0
+		BUG_ON(!get_lru_prev_page);
+		page = pgdat->async_shrink_page;
+	    }
 
 	    spin_unlock_irq(&pgdat->lru_lock);
 
@@ -4836,10 +4851,16 @@ expire_check:
                 //释放应用计数是0的page-------------这个过程需要释放锁，然后再加锁，加锁释放锁太频繁了
                 mem_cgroup_uncharge_list(&free_list);
                 free_unref_page_list(&free_list);
-		if(!list_empty(&free_list))
-		    panic("free_list not empty 2\n");
+		//if(!list_empty(&free_list))---free_unref_page_list函数并不会从free_list链表剔除page，到这里free_list链表肯定不会空
+		//    panic("free_list not empty 2\n");
 	        spin_lock_irq(&pgdat->lru_lock);
 	    }
+	    /*free_unref_page_list函数并不会从free_list链表剔除page，到这里free_list链表不会空。但是实际到这里free_list上的page已经转移到了lru链表等。
+	      free_list这个头结点的next指针指向的第一个page，但该page的prev指针不是指向free_list头结点，因为该page在lru链表上。此时free_list这个链表
+	      就是有问题的。等将来执行async_isolate_lru_pages->list_move()把符合内存回收条件的page添加到free_list链表，执行到__list_add()会报告
+	      "list_add corruption. next->prev should be prev"错误而内核crash。因为free_list这个头结点的next指针指向的page，该page的prev指针指向的不是
+	      free_list头结点。解决方法就是重新初始化free_list，它上边的page此时都是无效的。*/
+	    INIT_LIST_HEAD(&free_list);
 	}
 
         //page和 async_shrink_page不一样，说明前边释放lru_lock后，休眠，这段时间其他把休眠前的page从lru链表剔除了，执行update_async_shrink_page()，
@@ -4849,7 +4870,10 @@ expire_check:
         if(unlikely(pgdat->async_shrink_page)){
 	    if(pgdat->async_shrink_page != page)
 	        page = pgdat->async_shrink_page;
-	    
+	    else if(get_lru_prev_page == 0)
+	    //这里成立说明上边有休眠的场景，休眠前把page保存到async_shrink_page，然后休眠。休眠过程page没有被剔除lru链表，于是这里就取出page在lru链表的上一个page，作为下次循环判断的page
+		page = list_prev_entry(page, lru);
+
 	    pgdat->async_shrink_page = NULL;
 	}
 	else
@@ -4868,15 +4892,17 @@ expire_check:
             spin_unlock_irq(&pgdat->lru_lock);
 	}
     }
-    if(open_shrink_printk)
+    if(open_shrink_printk && nr_reclaimed)
+        printk("5:%s %s %d free_page_count:%d all_page_count:%d scan_page_count:%d nr_reclaimed:%ld memcg:0x%llx %s\n",__func__,current->comm,current->pid,free_page_count,all_page_count,scan_page_count,nr_reclaimed,(u64)memcg,lru == LRU_INACTIVE_FILE ?"inactive file lru":"active file lru");
+    else if(open_shrink_printk1)
         printk("5:%s %s %d free_page_count:%d all_page_count:%d scan_page_count:%d nr_reclaimed:%ld memcg:0x%llx %s\n",__func__,current->comm,current->pid,free_page_count,all_page_count,scan_page_count,nr_reclaimed,(u64)memcg,lru == LRU_INACTIVE_FILE ?"inactive file lru":"active file lru");
 
     //释放应用计数是0的page
     mem_cgroup_uncharge_list(&free_list);
     free_unref_page_list(&free_list);
 
-    if(!list_empty(&free_list))
-        panic("free_list not empty 3\n");
+    //if(!list_empty(&free_list))
+    //    panic("free_list not empty 3\n");
     return free_page_count;
 }
 static int async_shrink_memory(void *p){

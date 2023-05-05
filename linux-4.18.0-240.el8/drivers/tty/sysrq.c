@@ -325,14 +325,24 @@ static struct sysrq_key_op sysrq_ftrace_dump_op = {
 int open_bfqq_printk;
 int open_bfqq_printk1;
 int open_shrink_printk;
+int open_shrink_printk1;
 static void sysrq_handle_showmem(int key)
 {
 	//show_mem(0, NULL);
     #if 1
-	if(open_shrink_printk)
-	    open_shrink_printk = 0;
-	else
+        if(open_shrink_printk == 0 && open_shrink_printk1 == 0){
 	    open_shrink_printk = 1;
+	    open_shrink_printk1 = 0;
+	}
+        else if(open_shrink_printk == 1 && open_shrink_printk1 == 0){
+	    open_shrink_printk = 1;
+	    open_shrink_printk1 = 1;
+	}
+        else if(open_shrink_printk == 1 && open_shrink_printk1 == 1){
+	    open_shrink_printk = 0;
+	    open_shrink_printk1 = 0;
+	}
+	printk("open_shrink_printk:%d open_shrink_printk1:%d \n",open_shrink_printk,open_shrink_printk1);
     #else
 	if(open_bfqq_printk)
 	    open_bfqq_printk = 0;
