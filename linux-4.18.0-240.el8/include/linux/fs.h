@@ -425,6 +425,7 @@ struct address_space {
 	gfp_t			gfp_mask;	/* implicit gfp mask for allocations */
 	struct list_head	private_list;	/* for use by the address_space */
 	void			*private_data;	/* ditto */
+	void                    *hot_file_stat;
 	errseq_t		wb_err;
 	RH_KABI_RESERVE(1)
 	RH_KABI_RESERVE(2)
