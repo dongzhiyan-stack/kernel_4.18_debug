@@ -41,6 +41,8 @@
 #include <trace/events/pagemap.h>
 /******************************************************************/
 extern int async_shrink_enable;
+extern int hot_file_shrink_enable;
+extern int hot_file_update_file_status(struct page *page);
 /* How many pages do we try to swap or page in/out together? */
 int page_cluster;
 
@@ -363,7 +365,6 @@ static void __lru_cache_activate_page(struct page *page)
 
 	put_cpu_var(lru_add_pvec);
 }
-
 /*
  * Mark a page as having seen activity.
  *
@@ -407,6 +408,9 @@ void mark_page_accessed(struct page *page)
 	    if (page_is_idle(page))
 		clear_page_idle(page);
 	}
+
+	if(hot_file_shrink_enable)
+	    hot_file_update_file_status(page);
 }
 EXPORT_SYMBOL(mark_page_accessed);
 

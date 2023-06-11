@@ -102,6 +102,7 @@
 #if defined(CONFIG_SYSCTL)
 //使能异步内存回收
 extern int async_shrink_enable;
+extern int hot_file_shrink_enable;
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
@@ -1374,6 +1375,7 @@ static struct ctl_table vm_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &one_hundred,
 	},
+	/*******************************************************/
 	{
 		.procname	= "async_shrink_enable",
 		.data		= &async_shrink_enable,
@@ -1381,6 +1383,15 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 	},
+	{
+		.procname	= "hot_file_shrink_enable",
+		.data		= &hot_file_shrink_enable,
+		.maxlen		= sizeof(hot_file_shrink_enable),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+	},
+
+	/*******************************************************/
 #ifdef CONFIG_HUGETLB_PAGE
 	{
 		.procname	= "nr_hugepages",
