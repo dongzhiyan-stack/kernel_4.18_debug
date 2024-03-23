@@ -52,6 +52,34 @@
 
 #include <asm/mman.h>
 
+#define USE_RADIX_TREE_NODE_CACHE
+unsigned int xarray_tree_node_cache_hit;
+
+#ifdef USE_RADIX_TREE_NODE_CACHE
+//如果要从xarray tree剔除的page在xarray_tree_node_cache里，且这个node里如果在剔除这个page后成光杆司令了，
+//那就会剔除这个node，此时就令xarray_tree_node_cache失效
+void solve_xarray_tree_node_cache(struct address_space *mapping,struct page *page)
+{
+ 	//该函数在xarray tree在剔除page的page_cache_delete()和page_cache_delete_batch()中调用，如果它的父节点只有一个page了，那剔除这个page后父节点就会被释放了
+	if(mapping->rh_reserved2){
+            struct xa_node *xa_node_parent = (struct xa_node *)mapping->rh_reserved2;
+	    if(xa_node_parent->count == 1){
+	        mapping->rh_reserved2 = 0;
+	        mapping->rh_reserved3 = 0;
+		/*这个smp_wmb跟find_get_entry()里的smp_rmb()成对，这里有个很关键的问题，如果page_cache_delete()中
+		 * 把这个父节点释放了，但是find_get_entry()里还在使用这个父节点怎么办？两处防护，1:find_get_entry()
+		 * 中使用父节点node的代码rcu_lock里，保证在rcu_lock期间不会释放掉父节点node。2:就是这里的内存屏障。因为
+		 * 存在一种极端情况：find_get_entry()里正在使用这个父节点node，rcu_lock。同时另一个线程page_cache_delete()释放
+		 * 这个父节点，但只是把父节点移动到rcu异步链表。等find_get_entry()中退出rcu lock，这个父节点会立即释放掉。
+		 * 因为这里加了内存屏障，保证了"mapping->rh_reserved2 = 0"清0这个赋值一定先于"把父节点移动到rcu异步链表"执行
+		 * 而新的进程执行到find_get_entry()，先smp_rmb,从无效队列首先获取到mapping->rh_reserved2是，就不会再使用这个
+		 * 可能立即被释放掉的父节点node了*/
+		smp_wmb();
+	    }
+        }
+  
+}
+#endif
 /*
  * Shared mappings implemented 30.11.1994. It's not fully working yet,
  * though.
@@ -132,7 +160,15 @@ static void page_cache_delete(struct address_space *mapping,
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	VM_BUG_ON_PAGE(PageTail(page), page);
 	VM_BUG_ON_PAGE(nr != 1 && shadow, page);
-
+#ifdef USE_RADIX_TREE_NODE_CACHE
+	/*如果要从xarray tree剔除的page在xarray_tree_node_cache里，且这个node里如果在剔除这个page后成光杆司令了，
+	  那就会剔除这个node，此时就令xarray_tree_node_cache失效。剔除父节点node在下边的“xas_store(&xas, shadow)”
+	  执行，因此要放到“xas_store(&xas, shadow)”前边，因为 xas_store(&xas, shadow)执行后，父节点会立即被释放掉。
+	  solve_xarray_tree_node_cache()里核心操作是"令mapping->rh_reserved2清0表示xarray_tree_node_cache代表的父节点node失效。然后
+	  "smp_wmb()"。接着，page_cache_delete函数执行"xas_store(&xas, shadow)"释放父节点node。用内存屏障smp_wmb隔开
+	  前后两个操作！这样将来find_get_entry()中新的进程执行时，立即看到mapping->rh_reserved2是0，就不会再使用它执行的父节点了*/
+	solve_xarray_tree_node_cache(mapping,page);
+#endif	
 	xas_store(&xas, shadow);
 	xas_init_marks(&xas);
 
@@ -328,6 +364,16 @@ static void page_cache_delete_batch(struct address_space *mapping,
 					!= pvec->pages[i]->index, page);
 			tail_pages--;
 		}
+#ifdef USE_RADIX_TREE_NODE_CACHE
+		/*如果要从xarray tree剔除的page在xarray_tree_node_cache里，且这个node里如果在剔除这个page后成光杆司令了，
+		  那就会剔除这个node，此时就令xarray_tree_node_cache失效。剔除父节点node在下边的“xas_store(&xas, shadow)”
+		  执行，因此要放到“xas_store(&xas, NULL)”前边，因为 xas_store(&xas, NULL)执行后，父节点会立即被释放掉。
+		  solve_xarray_tree_node_cache()里核心操作是"令mapping->rh_reserved2清0表示xarray_tree_node_cache代表的父节点node失效。然后
+		  "smp_wmb()"。接着，page_cache_delete函数执行"xas_store(&xas, NULL)"释放父节点node。用内存屏障smp_wmb隔开
+		  前后两个操作！这样将来find_get_entry()中新的进程执行时，立即看到mapping->rh_reserved2是0，就不会再使用它执行的父节点了*/
+		solve_xarray_tree_node_cache(mapping,page);
+#endif	
+
 		xas_store(&xas, NULL);
 		total_pages++;
 	}
@@ -1492,9 +1538,34 @@ struct page *find_get_entry(struct address_space *mapping, pgoff_t offset)
 	struct page *head, *page;
 
 	rcu_read_lock();
+//这段代码必须放到rcu lock里，保证node结构不会被释放
+#ifdef USE_RADIX_TREE_NODE_CACHE
+	//判断要查找的page是否在xarray tree的cache node里
+	if(mapping->rh_reserved2){
+	    smp_rmb();
+	    //要插在的page索引在缓存的node里
+	    if((offset >= mapping->rh_reserved3) && (offset <= (mapping->rh_reserved3 + XA_CHUNK_MASK))){
+		unsigned int xa_offset = offset & XA_CHUNK_MASK;
+		struct xa_node *xa_node_parent = (struct xa_node *)mapping->rh_reserved2;
+		page = xa_node_parent->slots[xa_offset];
+		if(page && page->index == offset){
+		    xarray_tree_node_cache_hit ++;
+		    xas.xa_offset = xa_offset;
+		    xas.xa_node = xa_node_parent;
+		    goto find_page;
+		}
+	    }
+	}
+#endif
+
 repeat:
 	xas_reset(&xas);
 	page = xas_load(&xas);
+
+#ifdef USE_RADIX_TREE_NODE_CACHE
+find_page:
+#endif
+
 	if (xas_retry(&xas, page))
 		goto repeat;
 	/*
@@ -1523,6 +1594,18 @@ repeat:
 		put_page(head);
 		goto repeat;
 	}
+
+#ifdef USE_RADIX_TREE_NODE_CACHE
+	//如果本次查找的page所在xarray tree的父节点变化了，则把最新的保存到mapping->rh_reserved2
+	if(mapping->rh_reserved2 != (unsigned long)xas.xa_node){
+	    /*保存父节点node和这个node节点slots里最小的page索引。这两个赋值可能被多进程并发赋值，导致
+	     *mapping->rh_reserved2和mapping->rh_reserved3 可能不是同一个node节点的，错乱了。这就有大问题了！
+	     *没事，这种情况上边的if(page && page->index == offset)就会不成立了*/
+	    mapping->rh_reserved2 = (unsigned long)xas.xa_node;
+	    mapping->rh_reserved3 = offset & (~XA_CHUNK_MASK);
+	}
+#endif
+
 out:
 	rcu_read_unlock();
 

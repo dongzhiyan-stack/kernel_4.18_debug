@@ -103,6 +103,8 @@
 //使能异步内存回收
 extern int async_shrink_enable;
 extern int hot_file_shrink_enable;
+extern unsigned int xarray_tree_node_cache_hit;
+
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
@@ -1390,6 +1392,14 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 	},
+	{
+		.procname	= "xarray_tree_node_cache_hit",
+		.data		= &xarray_tree_node_cache_hit,
+		.maxlen		= sizeof(xarray_tree_node_cache_hit),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+	},
+
 
 	/*******************************************************/
 #ifdef CONFIG_HUGETLB_PAGE
