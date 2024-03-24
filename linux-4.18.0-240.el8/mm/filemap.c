@@ -1548,7 +1548,9 @@ struct page *find_get_entry(struct address_space *mapping, pgoff_t offset)
 		unsigned int xa_offset = offset & XA_CHUNK_MASK;
 		struct xa_node *xa_node_parent = (struct xa_node *)mapping->rh_reserved2;
 		page = xa_node_parent->slots[xa_offset];
-		if(page && page->index == offset){
+	
+		if(page && !xa_is_zero(page) && !xa_is_retry(page) && !xa_is_value(page)
+			&& page->index == offset){
 		    xarray_tree_node_cache_hit ++;
 		    xas.xa_offset = xa_offset;
 		    xas.xa_node = xa_node_parent;
